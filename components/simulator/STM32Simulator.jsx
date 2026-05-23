@@ -266,19 +266,11 @@ export default function STM32Simulator() {
     delayTimers.current.forEach(clearTimeout)
   }, [])
 
-  // ─── Circuit → Code generation ────────────────────────────────────────────
+  // ─── Circuit state handlers (No automatic code-gen) ───────────────────────
   const handleCircuitChanged = useCallback((newComponents, newConnections) => {
     setCircuitComponents(newComponents)
     setConnections(newConnections)
-
-    const generated = generateCodeFromCircuit(newComponents, newConnections)
-    if (generated) {
-      overwriteMainCode(generated)
-      setCodeGenBanner('✨ Code auto-generated from circuit!')
-      setActiveFileId('main')
-      setTimeout(() => setCodeGenBanner(null), 3000)
-    }
-  }, [overwriteMainCode])
+  }, [])
 
   const handleAddComponent = useCallback((comp) => {
     const newComponents = [...circuitComponents, {
@@ -300,6 +292,46 @@ export default function STM32Simulator() {
   const handleConnectionsChange = useCallback((newConns) => {
     handleCircuitChanged(circuitComponents, newConns)
   }, [circuitComponents, handleCircuitChanged])
+
+  // ─── Manual Code & Diagram Generator ─────────────────────────────────────
+  const handleGenerateCode = useCallback(() => {
+    const generatedCode = generateCodeFromCircuit(circuitComponents, connections)
+
+    const diagramObj = {
+      version: 1,
+      parts: [
+        { type: 'board-bluepill-stm32f103c8', id: 'stm1' },
+        ...circuitComponents.map(c => ({
+          type: c.type === 'led' ? `wokwi-led-${c.color || 'red'}` : c.type,
+          id: c.id,
+          top: c.y,
+          left: c.x,
+          attrs: { color: c.color || 'red' }
+        }))
+      ],
+      connections: connections.map(conn => [
+        `${conn.from.startsWith('P') ? 'stm1' : conn.from.split(':')[0]}:${conn.from.startsWith('P') ? conn.from : conn.from.split(':')[1]}`,
+        `${conn.to.startsWith('P') ? 'stm1' : conn.to.split(':')[0]}:${conn.to.startsWith('P') ? conn.to : conn.to.split(':')[1]}`,
+        conn.color || 'green',
+        []
+      ])
+    }
+    const diagramJson = JSON.stringify(diagramObj, null, 2)
+
+    setFiles(prev => prev.map(f => {
+      if (f.id === 'main' && generatedCode) {
+        return { ...f, content: generatedCode }
+      }
+      if (f.id === 'diagram') {
+        return { ...f, content: diagramJson }
+      }
+      return f
+    }))
+
+    setCodeGenBanner('✨ Code & diagram.json generated successfully!')
+    setActiveFileId('main')
+    setTimeout(() => setCodeGenBanner(null), 3000)
+  }, [circuitComponents, connections])
 
   return (
     <div className="sim-root">
@@ -345,7 +377,18 @@ export default function STM32Simulator() {
               </svg>
               Diagram
             </span>
-            <div className="sim-canvas-actions">
+            <div className="sim-canvas-actions" style={{ display: 'flex', gap: '6px' }}>
+              <button
+                className="sim-add-comp-btn"
+                style={{ background: '#1b5e20', borderColor: '#2e7d32', color: '#69f0ae' }}
+                onClick={handleGenerateCode}
+                title="Generate main.c and diagram.json from circuit"
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ marginRight: '2px' }}>
+                  <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" />
+                </svg>
+                Generate Code
+              </button>
               <button className="sim-add-comp-btn" onClick={() => setShowPalette(v => !v)}>
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                   <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
