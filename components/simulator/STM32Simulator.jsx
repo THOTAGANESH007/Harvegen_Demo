@@ -7,13 +7,14 @@ import CircuitCanvas from './CircuitCanvas'
 import SerialMonitor from './SerialMonitor'
 import ComponentPalette from './ComponentPalette'
 import FileTree from './FileTree'
-import { runSimulation, detectErrors, createGPIOState } from './stm32Engine'
+import LibraryPalette from './LibraryPalette'
+import { runSimulation, detectErrors, createGPIOState, generateCodeFromCircuit } from './stm32Engine'
 import './simulator.css'
 
 const DEFAULT_CODE = `/**
- * STM32F103C8 — Blue Pill
- * LED Blink + UART Hello
- * Edit this code and press ▶ Play!
+ * STM32F103C8
+ * Blink + Serial Example
+ * ▶ Press Play to simulate!
  */
 #include "stm32f1xx_hal.h"
 #include <stdio.h>
@@ -27,7 +28,7 @@ int main(void)
   SystemClock_Config();
   MX_GPIO_Init();
 
-  printf("STM32 Started!\\n");
+  printf("STM32 Ready!\\n");
 
   while (1)
   {
@@ -49,8 +50,7 @@ void SystemClock_Config(void)
   RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
   RCC_OscInitStruct.PLL.PLLMUL = RCC_PLL_MUL9;
   HAL_RCC_OscConfig(&RCC_OscInitStruct);
-  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK | RCC_CLOCKTYPE_SYSCLK
-                               | RCC_CLOCKTYPE_PCLK1 | RCC_CLOCKTYPE_PCLK2;
+  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK|RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
   RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
   RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
   RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV2;
@@ -71,21 +71,15 @@ static void MX_GPIO_Init(void)
 }
 `
 
-const INITIAL_FILES = [
+const INIT_FILES = [
   { id: 'main', name: 'main.c', type: 'c', content: DEFAULT_CODE },
-  {
-    id: 'diagram', name: 'diagram.json', type: 'json',
-    content: JSON.stringify({ version: 1, author: 'Harvegen', parts: [{ type: 'board-bluepill-stm32f103c8', id: 'stm1' }], connections: [] }, null, 2)
-  },
-  {
-    id: 'cmake', name: 'CMakeLists.txt', type: 'cmake',
-    content: 'cmake_minimum_required(VERSION 3.16)\nproject(stm32_project)\nset(CMAKE_C_STANDARD 11)\nadd_executable(firmware src/main.c)\ntarget_link_libraries(firmware STM32::HAL::STM32F1xx)'
-  },
+  { id: 'diagram', name: 'diagram.json', type: 'json', content: JSON.stringify({ version: 1, parts: [{ type: 'board-bluepill-stm32f103c8', id: 'stm1' }], connections: [] }, null, 2) },
+  { id: 'cmake', name: 'CMakeLists.txt', type: 'cmake', content: 'cmake_minimum_required(VERSION 3.16)\nproject(stm32_project)\nset(CMAKE_C_STANDARD 11)\nadd_executable(firmware src/main.c)\ntarget_link_libraries(firmware STM32::HAL::STM32F1xx)' },
 ]
 
 export default function STM32Simulator() {
-  const [simState, setSimState] = useState('idle')       // idle | running | paused | building | error
-  const [files, setFiles] = useState(INITIAL_FILES)
+  const [simState, setSimState] = useState('idle')
+  const [files, setFiles] = useState(INIT_FILES)
   const [activeFileId, setActiveFileId] = useState('main')
   const [circuitComponents, setCircuitComponents] = useState([])
   const [connections, setConnections] = useState([])
@@ -94,245 +88,267 @@ export default function STM32Simulator() {
   const [activePanel, setActivePanel] = useState('serial')
   const [showPalette, setShowPalette] = useState(false)
   const [panelSizes, setPanelSizes] = useState({ code: 42, canvas: 58 })
-  const [bottomPanelOpen, setBottomPanelOpen] = useState(true)
+  const [bottomOpen, setBottomOpen] = useState(true)
   const [simTime, setSimTime] = useState(0)
-  // GPIO driven by engine
   const [gpioState, setGpioState] = useState(createGPIOState())
+  const [errorLines, setErrorLines] = useState([])  // lines to highlight in editor
+  const [codeGenBanner, setCodeGenBanner] = useState(null) // flash notification
+  const [libraries, setLibraries] = useState(['STM32 HAL Driver', 'CMSIS Core', 'LL USB Driver'])
+  const [fileTreeCollapsed, setFileTreeCollapsed] = useState(false)
+  const [showLibPalette, setShowLibPalette] = useState(false)
 
   const abortRef = useRef(null)
   const clockRef = useRef(null)
-  const simStartRef = useRef(null)
-  const runnerRef = useRef(null)
-  const delayQueueRef = useRef([])
+  const simStart = useRef(null)
+  const delayTimers = useRef([])
 
   const activeFile = files.find(f => f.id === activeFileId)
+  const mainCode = files.find(f => f.id === 'main')?.content || ''
 
   const updateFileContent = useCallback((content) => {
     setFiles(prev => prev.map(f => f.id === activeFileId ? { ...f, content } : f))
+    // Clear error highlights when code changes
+    if (activeFileId === 'main') setErrorLines([])
   }, [activeFileId])
 
-  // ── Build ──────────────────────────────────────────────────────────────────
-  const handleBuild = useCallback(async () => {
-    const mainFile = files.find(f => f.id === 'main')
-    const code = mainFile?.content || ''
+  const overwriteMainCode = useCallback((code) => {
+    setFiles(prev => prev.map(f => f.id === 'main' ? { ...f, content: code } : f))
+    setErrorLines([])
+  }, [])
 
+  const handleAddLibrary = useCallback((libName) => {
+    setLibraries(prev => {
+      if (prev.includes(libName)) return prev
+      return [...prev, libName]
+    })
+    setShowLibPalette(false)
+    setActivePanel('build')
+    setBottomOpen(true)
+    setBuildLogs(prev => [
+      ...prev,
+      { msg: `[INFO] Downloading package library "${libName}"...`, type: 'info', time: Date.now() },
+      { msg: `[INFO] Extracting headers & compiling source...`, type: 'info', time: Date.now() },
+      { msg: `[OK]   Linked "${libName}" successfully to target "firmware.elf"`, type: 'success', time: Date.now() }
+    ])
+  }, [])
+
+  // ─── Build (validate only) ────────────────────────────────────────────────
+  const handleBuild = useCallback(async () => {
     setSimState('building')
     setBuildLogs([])
     setActivePanel('build')
-    setBottomPanelOpen(true)
+    setBottomOpen(true)
+    setErrorLines([])
 
-    const log = (msg, type = 'info') =>
-      setBuildLogs(prev => [...prev, { msg, type, time: Date.now() }])
+    const log = (msg, type = 'info') => setBuildLogs(prev => [...prev, { msg, type, time: Date.now() }])
 
-    log('[INFO] Initializing build — STM32F103C8T6', 'info')
-    await delay(300)
-    log('[INFO] Checking source: main.c', 'info')
-    await delay(300)
+    log('[INFO] STM32F103C8T6 · ARM Cortex-M3 · 72MHz', 'info')
+    await sleep(200)
+    log('[INFO] Compiling main.c...', 'info')
+    await sleep(300)
 
-    const errors = detectErrors(code)
-    const errs = errors.filter(e => e.severity === 'error')
+    const errors = detectErrors(mainCode)
+    const fatal = errors.filter(e => e.severity === 'error')
     const warns = errors.filter(e => e.severity === 'warning')
 
     for (const w of warns) {
-      log(`[WARN] Line ${w.line}: ${w.msg}`, 'warning')
-      await delay(100)
+      await sleep(80)
+      log(`[WARN]  line ${w.line}: ${w.msg}`, 'warning')
+    }
+    for (const e of fatal) {
+      await sleep(80)
+      log(`[ERROR] line ${e.line}: ${e.msg}`, 'error')
     }
 
-    if (errs.length > 0) {
-      for (const e of errs) {
-        log(`[ERROR] ${e.line ? `Line ${e.line}: ` : ''}${e.msg}`, 'error')
-        await delay(100)
-      }
-      log('[FAILED] Build failed — fix errors above', 'error')
+    if (fatal.length > 0) {
+      setErrorLines(fatal.filter(e => e.line > 0).map(e => e.line))
+      await sleep(200)
+      log(`[FAILED] Build failed — ${fatal.length} error(s)`, 'error')
       setSimState('error')
       return
     }
 
-    log('[INFO] arm-none-eabi-gcc -mcpu=cortex-m3 -mthumb -O2 -c main.c -o main.o', 'info')
-    await delay(500)
-    log('[OK]   Compiled main.c → main.o', 'success')
-    await delay(300)
-    log('[INFO] arm-none-eabi-ld -T STM32F103C8_FLASH.ld -o firmware.elf main.o', 'info')
-    await delay(400)
-    log('[OK]   Linked → firmware.elf', 'success')
-    await delay(200)
-    log('[INFO] arm-none-eabi-objcopy -O binary firmware.elf firmware.bin', 'info')
-    await delay(300)
-    log('[OK]   firmware.bin generated', 'success')
-    await delay(200)
-    log('[INFO] Flash: 5,120 bytes used (5 KB / 64 KB)', 'info')
-    log('[INFO] RAM:   1,024 bytes used (1 KB / 20 KB)', 'info')
-    await delay(200)
-    log('[SUCCESS] ✅ Build complete — ready to simulate', 'success')
+    await sleep(300)
+    log('[OK]   arm-none-eabi-gcc → main.o', 'success')
+    await sleep(200)
+    log('[OK]   Linking → firmware.elf', 'success')
+    await sleep(150)
+    log('[OK]   Flash: ~5 KB / 64 KB', 'success')
+    await sleep(100)
+    log('[SUCCESS] ✅ Build complete', 'success')
     setSimState('idle')
-  }, [files])
+  }, [mainCode])
 
-  // ── Play ───────────────────────────────────────────────────────────────────
+  // ─── Play ─────────────────────────────────────────────────────────────────
   const handlePlay = useCallback(async () => {
     if (simState === 'running') return
-
-    // Cancel any previous run
     if (abortRef.current) abortRef.current.abort()
-    const controller = new AbortController()
-    abortRef.current = controller
+
+    const ctrl = new AbortController()
+    abortRef.current = ctrl
 
     setSimState('running')
     setSerialLogs([])
     setGpioState(createGPIOState())
     setActivePanel('serial')
-    setBottomPanelOpen(true)
-    simStartRef.current = Date.now()
+    setBottomOpen(true)
+    setErrorLines([])
+    simStart.current = Date.now()
 
-    // Clock ticker
     if (clockRef.current) clearInterval(clockRef.current)
-    clockRef.current = setInterval(() => {
-      setSimTime(Math.floor((Date.now() - simStartRef.current) / 1000))
-    }, 1000)
-
-    const mainFile = files.find(f => f.id === 'main')
-    const code = mainFile?.content || ''
+    clockRef.current = setInterval(() => setSimTime(Math.floor((Date.now() - simStart.current) / 1000)), 1000)
 
     const addLog = (log) => setSerialLogs(prev => [...prev, log])
 
-    // Run the engine as async generator
-    const generator = runSimulation(code, controller.signal)
-    runnerRef.current = generator
-
-    const processEvents = async () => {
-      try {
-        for await (const event of generator) {
-          if (controller.signal.aborted) break
-
-          switch (event.type) {
-            case 'boot':
-            case 'separator':
-              addLog({ msg: event.msg, type: 'system', time: event.time })
-              break
-            case 'gpio':
-              addLog({ msg: event.msg, type: event.value === 0 ? 'highlight' : 'output', time: event.time })
-              setGpioState(prev => {
-                const next = { ...prev, [event.port]: { ...prev[event.port], [event.pin]: event.value } }
-                return next
-              })
-              break
-            case 'serial':
-              addLog({ msg: `> ${event.msg}`, type: 'serial', time: event.time })
-              break
-            case 'delay':
-              addLog({ msg: event.msg, type: 'delay', time: event.time })
-              await new Promise(r => {
-                const t = setTimeout(r, Math.min(event.ms, 2000)) // cap at 2s real time per delay
-                delayQueueRef.current.push(t)
-              })
-              break
-            case 'error':
-              addLog({ msg: event.msg, type: 'error', time: event.time })
-              break
-            case 'warning':
-              addLog({ msg: event.msg, type: 'warning', time: event.time })
-              break
-            case 'system':
-              addLog({ msg: event.msg, type: 'system', time: event.time })
-              break
+    const gen = runSimulation(mainCode, ctrl.signal)
+      ; (async () => {
+        try {
+          for await (const ev of gen) {
+            if (ctrl.signal.aborted) break
+            switch (ev.type) {
+              case 'boot': case 'separator': case 'system':
+                addLog({ msg: ev.msg, type: 'system', time: ev.time }); break
+              case 'success':
+                addLog({ msg: ev.msg, type: 'success', time: ev.time }); break
+              case 'gpio':
+                addLog({ msg: ev.msg, type: ev.value === 0 ? 'highlight' : 'output', time: ev.time })
+                setGpioState(prev => ({ ...prev, [ev.port]: { ...prev[ev.port], [ev.pin]: ev.value } }))
+                break
+              case 'serial':
+                addLog({ msg: `> ${ev.msg}`, type: 'serial', time: ev.time }); break
+              case 'delay':
+                addLog({ msg: ev.msg, type: 'delay', time: ev.time })
+                await new Promise(r => { const t = setTimeout(r, Math.min(ev.ms, 1500)); delayTimers.current.push(t) })
+                break
+              case 'error':
+                addLog({ msg: ev.msg, type: 'error', time: ev.time })
+                if (ev.line) setErrorLines(prev => [...new Set([...prev, ev.line])])
+                break
+              case 'warning':
+                addLog({ msg: ev.msg, type: 'warning', time: ev.time }); break
+            }
           }
+        } catch (err) {
+          if (!ctrl.signal.aborted) addLog({ msg: `Runtime error: ${err.message}`, type: 'error', time: Date.now() })
         }
-      } catch (err) {
-        if (!controller.signal.aborted) {
-          addLog({ msg: `Runtime error: ${err.message}`, type: 'error', time: Date.now() })
+        // When generator ends naturally (error/stop), update state
+        if (!ctrl.signal.aborted) {
+          setSimState(prev => prev === 'running' ? 'idle' : prev)
+          if (clockRef.current) clearInterval(clockRef.current)
         }
-      }
-    }
+      })()
+  }, [simState, mainCode])
 
-    processEvents()
-  }, [simState, files])
-
-  // ── Pause ──────────────────────────────────────────────────────────────────
+  // ─── Pause ────────────────────────────────────────────────────────────────
   const handlePause = useCallback(() => {
     if (simState !== 'running') return
-    setSimState('paused')
     if (abortRef.current) abortRef.current.abort()
     if (clockRef.current) clearInterval(clockRef.current)
-    setSerialLogs(prev => [...prev, { msg: '⏸ Simulation paused', type: 'system', time: Date.now() }])
+    setSimState('paused')
+    setSerialLogs(prev => [...prev, { msg: '⏸ Paused', type: 'system', time: Date.now() }])
   }, [simState])
 
-  // ── Stop ───────────────────────────────────────────────────────────────────
+  // ─── Stop ─────────────────────────────────────────────────────────────────
   const handleStop = useCallback(() => {
     if (abortRef.current) abortRef.current.abort()
     if (clockRef.current) clearInterval(clockRef.current)
-    delayQueueRef.current.forEach(t => clearTimeout(t))
-    delayQueueRef.current = []
+    delayTimers.current.forEach(t => clearTimeout(t))
+    delayTimers.current = []
     setSimState('idle')
     setSimTime(0)
     setGpioState(createGPIOState())
-    setSerialLogs(prev => [...prev, { msg: '⏹ Simulation stopped', type: 'system', time: Date.now() }])
+    setSerialLogs(prev => [...prev, { msg: '⏹ Stopped', type: 'system', time: Date.now() }])
   }, [])
 
-  useEffect(() => {
-    return () => {
-      if (abortRef.current) abortRef.current.abort()
-      if (clockRef.current) clearInterval(clockRef.current)
-      delayQueueRef.current.forEach(t => clearTimeout(t))
+  useEffect(() => () => {
+    if (abortRef.current) abortRef.current.abort()
+    if (clockRef.current) clearInterval(clockRef.current)
+    delayTimers.current.forEach(clearTimeout)
+  }, [])
+
+  // ─── Circuit → Code generation ────────────────────────────────────────────
+  const handleCircuitChanged = useCallback((newComponents, newConnections) => {
+    setCircuitComponents(newComponents)
+    setConnections(newConnections)
+
+    const generated = generateCodeFromCircuit(newComponents, newConnections)
+    if (generated) {
+      overwriteMainCode(generated)
+      setCodeGenBanner('✨ Code auto-generated from circuit!')
+      setActiveFileId('main')
+      setTimeout(() => setCodeGenBanner(null), 3000)
     }
-  }, [])
+  }, [overwriteMainCode])
 
-  // ── Component palette ──────────────────────────────────────────────────────
-  const handleAddComponent = useCallback((component) => {
-    setCircuitComponents(prev => [...prev, {
-      ...component,
-      id: `${component.type}-${Date.now()}`,
-      x: 180 + Math.random() * 180,
-      y: 80 + Math.random() * 180,
-    }])
+  const handleAddComponent = useCallback((comp) => {
+    const newComponents = [...circuitComponents, {
+      ...comp,
+      id: `${comp.type}-${Date.now()}`,
+      x: 180 + Math.random() * 160,
+      y: 80 + Math.random() * 160,
+    }]
+    handleCircuitChanged(newComponents, connections)
     setShowPalette(false)
-  }, [])
+  }, [circuitComponents, connections, handleCircuitChanged])
 
   const handleRemoveComponent = useCallback((id) => {
-    setCircuitComponents(prev => prev.filter(c => c.id !== id))
-    setConnections(prev => prev.filter(c => c.from !== id && c.to !== id))
-  }, [])
+    const newComponents = circuitComponents.filter(c => c.id !== id)
+    const newConnections = connections.filter(c => c.from !== id && c.to !== id)
+    handleCircuitChanged(newComponents, newConnections)
+  }, [circuitComponents, connections, handleCircuitChanged])
+
+  const handleConnectionsChange = useCallback((newConns) => {
+    handleCircuitChanged(circuitComponents, newConns)
+  }, [circuitComponents, handleCircuitChanged])
 
   return (
     <div className="sim-root">
       <SimulatorToolbar
-        simState={simState}
-        simTime={simTime}
-        onPlay={handlePlay}
-        onPause={handlePause}
-        onStop={handleStop}
-        onBuild={handleBuild}
+        simState={simState} simTime={simTime}
+        onPlay={handlePlay} onPause={handlePause} onStop={handleStop} onBuild={handleBuild}
         onTogglePalette={() => setShowPalette(v => !v)}
-        showPalette={showPalette}
       />
 
+      {/* Code-gen flash banner */}
+      {codeGenBanner && (
+        <div className="sim-codegen-banner">{codeGenBanner}</div>
+      )}
+
       <div className="sim-workspace">
-        {/* Left: File Tree + Monaco Editor */}
+        {/* Left: File Tree + Editor */}
         <div className="sim-left-panel" style={{ width: `${panelSizes.code}%` }}>
-          <FileTree files={files} activeFileId={activeFileId} onSelect={setActiveFileId} />
+          <FileTree
+            files={files}
+            activeFileId={activeFileId}
+            onSelect={setActiveFileId}
+            collapsed={fileTreeCollapsed}
+            onToggleCollapse={() => setFileTreeCollapsed(v => !v)}
+            libraries={libraries}
+            onAddLibraryClick={() => setShowLibPalette(true)}
+          />
           <div className="sim-editor-area">
-            <CodeEditor file={activeFile} onChange={updateFileContent} simState={simState} />
+            <CodeEditor file={activeFile} onChange={updateFileContent} simState={simState} errorLines={errorLines} />
           </div>
         </div>
 
-        <ResizeHandle onResize={(delta) => {
-          setPanelSizes(prev => {
-            const newCode = Math.max(20, Math.min(70, prev.code + delta))
-            return { code: newCode, canvas: 100 - newCode }
-          })
-        }} />
+        <ResizeHandle onResize={d => setPanelSizes(prev => {
+          const c = Math.max(20, Math.min(70, prev.code + d))
+          return { code: c, canvas: 100 - c }
+        })} />
 
         {/* Right: Circuit Canvas */}
         <div className="sim-right-panel" style={{ width: `${panelSizes.canvas}%` }}>
           <div className="sim-canvas-header">
             <span className="sim-panel-label">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <rect x="2" y="3" width="20" height="14" rx="2" /><line x1="8" y1="21" x2="16" y2="21" /><line x1="12" y1="17" x2="12" y2="21" />
               </svg>
-              Circuit Diagram
+              Diagram
             </span>
             <div className="sim-canvas-actions">
-              <button className="sim-icon-btn" onClick={() => setShowPalette(v => !v)}>
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+              <button className="sim-add-comp-btn" onClick={() => setShowPalette(v => !v)}>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                  <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
                 </svg>
                 Add Component
               </button>
@@ -344,86 +360,62 @@ export default function STM32Simulator() {
             simState={simState}
             gpioState={gpioState}
             onRemoveComponent={handleRemoveComponent}
-            onConnectionsChange={setConnections}
-            onComponentsChange={setCircuitComponents}
+            onConnectionsChange={handleConnectionsChange}
+            onComponentsChange={updaterOrArray => {
+              // CircuitCanvas may pass a functional updater (prev => ...) or a plain array
+              const resolved = typeof updaterOrArray === 'function'
+                ? updaterOrArray(circuitComponents)
+                : updaterOrArray
+              handleCircuitChanged(resolved, connections)
+            }}
           />
         </div>
       </div>
 
-      {/* Bottom: Serial Monitor / Build Output */}
-      <div className={`sim-bottom-panel ${bottomPanelOpen ? 'open' : 'closed'}`}>
+      {/* Bottom: Serial / Build */}
+      <div className={`sim-bottom-panel ${bottomOpen ? 'open' : 'closed'}`}>
         <div className="sim-bottom-header">
           <div className="sim-bottom-tabs">
-            <button className={`sim-tab ${activePanel === 'serial' ? 'active' : ''}`}
-              onClick={() => { setActivePanel('serial'); setBottomPanelOpen(true) }}>
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>
-              </svg>
-              Serial Monitor
-            </button>
-            <button className={`sim-tab ${activePanel === 'build' ? 'active' : ''}`}
-              onClick={() => { setActivePanel('build'); setBottomPanelOpen(true) }}>
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/>
-                <polyline points="14 2 14 8 20 8"/>
-              </svg>
-              Build Output
-            </button>
+            {[
+              { id: 'serial', icon: '> _', label: 'Serial Monitor' },
+              { id: 'build', icon: '⚙', label: 'Build Output' },
+            ].map(t => (
+              <button key={t.id} className={`sim-tab ${activePanel === t.id ? 'active' : ''}`}
+                onClick={() => { setActivePanel(t.id); setBottomOpen(true) }}>
+                <span className="sim-tab-icon">{t.icon}</span>{t.label}
+                {t.id === 'build' && simState === 'error' && <span className="sim-tab-error-dot" />}
+              </button>
+            ))}
           </div>
           <div className="sim-bottom-actions">
-            <button className="sim-icon-btn" onClick={() => activePanel === 'serial' ? setSerialLogs([]) : setBuildLogs([])}>
-              Clear
-            </button>
-            <button className="sim-icon-btn" onClick={() => setBottomPanelOpen(v => !v)}>
-              {bottomPanelOpen ? '▼' : '▲'}
-            </button>
+            <button className="sim-icon-btn" onClick={() => activePanel === 'serial' ? setSerialLogs([]) : setBuildLogs([])}>Clear</button>
+            <button className="sim-icon-btn" onClick={() => setBottomOpen(v => !v)}>{bottomOpen ? '▾' : '▴'}</button>
           </div>
         </div>
-        {bottomPanelOpen && (
+        {bottomOpen && (
           <SerialMonitor
             logs={activePanel === 'serial' ? serialLogs : buildLogs}
-            type={activePanel}
-            simState={simState}
+            type={activePanel} simState={simState}
           />
         )}
       </div>
 
-      {showPalette && (
-        <ComponentPalette onAdd={handleAddComponent} onClose={() => setShowPalette(false)} />
-      )}
+      {showPalette && <ComponentPalette onAdd={handleAddComponent} onClose={() => setShowPalette(false)} />}
+      {showLibPalette && <LibraryPalette onAdd={handleAddLibrary} onClose={() => setShowLibPalette(false)} existing={libraries} />}
     </div>
   )
 }
 
 function ResizeHandle({ onResize }) {
-  const dragging = useRef(false)
-  const lastX = useRef(0)
+  const dragging = useRef(false), lastX = useRef(0)
   const onMouseDown = (e) => {
-    dragging.current = true
-    lastX.current = e.clientX
-    document.body.style.cursor = 'col-resize'
-    document.body.style.userSelect = 'none'
-    const onMove = (e) => {
-      if (!dragging.current) return
-      const dx = e.clientX - lastX.current
-      lastX.current = e.clientX
-      onResize((dx / window.innerWidth) * 100)
-    }
-    const onUp = () => {
-      dragging.current = false
-      document.body.style.cursor = ''
-      document.body.style.userSelect = ''
-      window.removeEventListener('mousemove', onMove)
-      window.removeEventListener('mouseup', onUp)
-    }
-    window.addEventListener('mousemove', onMove)
-    window.addEventListener('mouseup', onUp)
+    dragging.current = true; lastX.current = e.clientX
+    document.body.style.cssText = 'cursor:col-resize;user-select:none'
+    const onMove = (e) => { if (!dragging.current) return; const dx = e.clientX - lastX.current; lastX.current = e.clientX; onResize((dx / window.innerWidth) * 100) }
+    const onUp = () => { dragging.current = false; document.body.style.cssText = ''; window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp) }
+    window.addEventListener('mousemove', onMove); window.addEventListener('mouseup', onUp)
   }
-  return (
-    <div className="sim-resize-handle" onMouseDown={onMouseDown}>
-      <div className="sim-resize-grip" />
-    </div>
-  )
+  return <div className="sim-resize-handle" onMouseDown={onMouseDown}><div className="sim-resize-grip" /></div>
 }
 
-function delay(ms) { return new Promise(r => setTimeout(r, ms)) }
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)) }
