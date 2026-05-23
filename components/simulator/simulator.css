@@ -1,0 +1,441 @@
+/* ═══════════════════════════════════════════════
+   STM32 Simulator — Wokwi-inspired Dark Theme
+   ═══════════════════════════════════════════════ */
+
+/* Root layout — fills entire viewport */
+.sim-root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  width: 100%;
+  background: #0c0e1a;
+  color: #e2e8f0;
+  font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+  overflow: hidden;
+  user-select: none;
+}
+
+/* ─── Toolbar ─────────────────────────────────── */
+.sim-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  height: 48px;
+  min-height: 48px;
+  background: #0f1117;
+  border-bottom: 1px solid #1e2030;
+  z-index: 100;
+  flex-shrink: 0;
+}
+.sim-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-right: 8px;
+}
+.sim-brand-text { display: flex; flex-direction: column; line-height: 1.1; }
+.sim-brand-name { font-size: 13px; font-weight: 700; color: #e2e8f0; letter-spacing: -0.2px; }
+.sim-brand-chip { font-size: 10px; color: #6366f1; font-family: monospace; }
+
+.sim-controls { display: flex; align-items: center; gap: 4px; }
+
+.sim-ctrl-btn {
+  display: flex; align-items: center; gap: 6px;
+  padding: 5px 12px; border-radius: 6px;
+  font-size: 12px; font-weight: 600; cursor: pointer;
+  border: 1px solid transparent; transition: all 0.15s;
+}
+.sim-ctrl-btn.build {
+  background: #1e2030; color: #94a3b8; border-color: #2d3561;
+}
+.sim-ctrl-btn.build:hover:not(:disabled) { background:#2d3561; color:#e2e8f0; }
+.sim-ctrl-btn.play {
+  background: linear-gradient(135deg,#059669,#10b981);
+  color: #fff; border-color: #059669;
+}
+.sim-ctrl-btn.play:hover:not(:disabled) { filter: brightness(1.15); }
+.sim-ctrl-btn.play.active { background: #065f46; }
+.sim-ctrl-btn.pause {
+  background: #1e2030; color: #f59e0b; border-color: #92400e;
+}
+.sim-ctrl-btn.pause:hover:not(:disabled) { background:#78350f; color:#fcd34d; }
+.sim-ctrl-btn.pause.active { background:#78350f; }
+.sim-ctrl-btn.stop {
+  background: #1e2030; color: #ef4444; border-color: #7f1d1d;
+}
+.sim-ctrl-btn.stop:hover:not(:disabled) { background:#7f1d1d; color:#fca5a5; }
+.sim-ctrl-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+
+.sim-ctrl-divider { width: 1px; height: 24px; background: #1e2030; margin: 0 4px; flex-shrink: 0; }
+
+.sim-status-group { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.sim-status-indicator { display: flex; align-items: center; gap: 5px; }
+.sim-status-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+.sim-status-text { font-size: 11px; font-weight: 600; }
+.sim-timer { font-size: 11px; color: #10b981; font-family: monospace; font-weight: 700; background: #0d2818; padding: 2px 6px; border-radius: 4px; border: 1px solid #065f46; }
+
+.sim-chip-badge {
+  display: flex; align-items: center; gap: 4px;
+  font-size: 10px; color: #6b7280; background: #1a1d2e;
+  padding: 3px 8px; border-radius: 4px; border: 1px solid #1e2030;
+  font-family: monospace;
+}
+
+.sim-icon-btn {
+  display: flex; align-items: center; gap: 4px;
+  padding: 5px 8px; border-radius: 5px;
+  font-size: 11px; color: #6b7280; background: transparent;
+  border: 1px solid transparent; cursor: pointer; transition: all 0.15s;
+}
+.sim-icon-btn:hover { background: #1e2030; color: #e2e8f0; border-color: #2d3561; }
+
+.spin { animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ─── Workspace ───────────────────────────────── */
+.sim-workspace {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* ─── Left Panel ──────────────────────────────── */
+.sim-left-panel {
+  display: flex;
+  flex-direction: column;
+  background: #0f1117;
+  border-right: 1px solid #1e2030;
+  min-width: 200px;
+  overflow: hidden;
+}
+
+/* ─── File Tree ───────────────────────────────── */
+.sim-filetree {
+  background: #0c0e1a;
+  border-bottom: 1px solid #1e2030;
+  flex-shrink: 0;
+  overflow-y: auto;
+  max-height: 240px;
+  padding-bottom: 8px;
+}
+.sim-filetree-header {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 10px; font-weight: 700; color: #4b5563;
+  letter-spacing: 0.8px; padding: 8px 12px 4px;
+}
+.sim-filetree-group { padding: 2px 6px; }
+.sim-filetree-folder {
+  display: flex; align-items: center; gap: 6px;
+  padding: 3px 8px; font-size: 12px; color: #6b7280; font-weight: 600;
+}
+.sim-filetree-file {
+  display: flex; align-items: center; gap: 7px; width: 100%;
+  padding: 4px 8px 4px 18px; font-size: 12px; color: #6b7280;
+  background: transparent; border: none; cursor: pointer;
+  border-radius: 4px; text-align: left; position: relative; transition: all 0.1s;
+}
+.sim-filetree-file:hover { background: #1a1d2e; color: #e2e8f0; }
+.sim-filetree-file.active { background: #1e2748; color: #e2e8f0; }
+.sim-file-active-bar { position: absolute; left: 0; top: 2px; bottom: 2px; width: 2px; background: #6366f1; border-radius: 2px; }
+
+.sim-filetree-section { padding: 8px 12px 4px; border-top: 1px solid #1e2030; margin-top: 4px; }
+.sim-board-info { display: flex; align-items: center; gap: 8px; padding: 6px 0; }
+.sim-board-icon { width: 28px; height: 28px; background: linear-gradient(135deg,#1e3a5f,#1e4080); border: 1px solid #2d5a9e; border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 8px; font-weight: 900; color: #60a5fa; }
+.sim-board-name { font-size: 11px; font-weight: 700; color: #e2e8f0; }
+.sim-board-sub { font-size: 10px; color: #6b7280; font-family: monospace; }
+
+.sim-library-item { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #6b7280; padding: 2px 0; }
+.sim-add-lib-btn { display: flex; align-items: center; gap: 5px; font-size: 11px; color: #6366f1; background: transparent; border: none; cursor: pointer; padding: 4px 0; margin-top: 2px; }
+.sim-add-lib-btn:hover { color: #818cf8; }
+
+/* ─── Editor Area ─────────────────────────────── */
+.sim-editor-area { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.sim-editor-wrapper { display: flex; flex-direction: column; height: 100%; }
+.sim-editor-tab-bar {
+  display: flex; align-items: center; justify-content: space-between;
+  background: #0f1117; border-bottom: 1px solid #1e2030; padding: 0 8px; flex-shrink: 0; height: 32px;
+}
+.sim-editor-tab { display: flex; align-items: center; gap: 6px; padding: 5px 12px; font-size: 12px; color: #9ca3af; border-bottom: 2px solid #6366f1; }
+.sim-editor-tab.active { color: #e2e8f0; }
+.sim-editor-tab-dot { width: 6px; height: 6px; background: #f59e0b; border-radius: 50%; }
+.sim-editor-actions { display: flex; align-items: center; gap: 6px; }
+.sim-running-badge { display: flex; align-items: center; gap: 5px; font-size: 10px; color: #10b981; background: #0d2818; padding: 2px 8px; border-radius: 10px; border: 1px solid #065f46; }
+.sim-running-dot { width: 6px; height: 6px; background: #10b981; border-radius: 50%; animation: pulse 1s ease-in-out infinite; }
+@keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.5;transform:scale(0.8)} }
+
+/* ─── Resize Handle ───────────────────────────── */
+.sim-resize-handle {
+  width: 5px; background: #1e2030; cursor: col-resize;
+  flex-shrink: 0; display: flex; align-items: center; justify-content: center; transition: background 0.15s;
+}
+.sim-resize-handle:hover { background: #6366f1; }
+.sim-resize-grip { width: 3px; height: 24px; background: #374151; border-radius: 2px; }
+.sim-resize-handle:hover .sim-resize-grip { background: #fff; }
+
+/* ─── Right Panel (Canvas) ────────────────────── */
+.sim-right-panel { display: flex; flex-direction: column; min-width: 200px; overflow: hidden; }
+.sim-canvas-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 12px; height: 32px; min-height: 32px; background: #0f1117;
+  border-bottom: 1px solid #1e2030; flex-shrink: 0;
+}
+.sim-panel-label { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #6b7280; font-weight: 600; }
+.sim-canvas-actions { display: flex; align-items: center; gap: 6px; }
+.sim-canvas-container { flex: 1; position: relative; overflow: hidden; background: #0c0e1a; }
+
+/* ─── PCB Board Styles ────────────────────────── */
+.sim-pcb {
+  background: linear-gradient(135deg, #0d3a4a 0%, #0e4a5a 40%, #0d3a4a 100%);
+  border: 1.5px solid #0f5a6e;
+  border-radius: 4px;
+  position: relative;
+  box-shadow: 0 0 0 1px #1a7a8a40, 0 8px 32px #00000060;
+  overflow: hidden;
+}
+.sim-pcb::before {
+  content: '';
+  position: absolute; inset: 0;
+  background: repeating-linear-gradient(90deg, transparent, transparent 10px, rgba(255,255,255,0.015) 10px, rgba(255,255,255,0.015) 11px);
+  pointer-events: none;
+}
+
+.sim-usb {
+  position: absolute;
+  background: #e8e8e8;
+  border: 1px solid #999;
+  border-radius: 2px;
+  display: flex; align-items: center; justify-content: center;
+  color: #444; font-family: monospace; font-weight: 800;
+  box-shadow: 0 1px 3px #00000060;
+}
+.sim-chip-body {
+  position: absolute;
+  background: linear-gradient(145deg, #1a1a1a, #2d2d2d);
+  border: 1px solid #444;
+  border-radius: 2px;
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 2px 8px #000;
+}
+.sim-crystal {
+  position: absolute;
+  background: #silver;
+  background: linear-gradient(90deg,#b0b8c0,#d0d8e0,#b0b8c0);
+  border: 1px solid #8090a0;
+  border-radius: 2px;
+  box-shadow: 0 1px 4px #000;
+}
+.sim-onboard-led {
+  position: absolute;
+  border-radius: 50%;
+  transition: background 0.05s, box-shadow 0.05s;
+  cursor: help;
+}
+.sim-rst-btn {
+  position: absolute;
+  background: #2d2d2d;
+  border: 1px solid #555;
+  border-radius: 2px;
+  display: flex; align-items: center; justify-content: center;
+  color: #aaa; font-family: monospace;
+  cursor: pointer;
+}
+.sim-rst-btn:hover { background: #444; }
+
+/* GPIO Pin dots */
+.sim-pin-dot {
+  cursor: crosshair;
+  transition: all 0.1s;
+  box-shadow: 0 0 0 1px rgba(255,255,255,0.1);
+  flex-shrink: 0;
+}
+.sim-pin-dot.gpio { background: #c8a862; }
+.sim-pin-dot.gnd { background: #1e1e1e; border: 1px solid #555; }
+.sim-pin-dot.pwr { background: #dc2626; }
+.sim-pin-dot.pc13 { background: #ef4444; box-shadow: 0 0 4px #ef4444; }
+.sim-pin-dot.active { background: #6366f1 !important; box-shadow: 0 0 6px #6366f1 !important; animation: pinpulse 0.6s ease-in-out infinite; }
+.sim-pin-dot.hover { transform: scale(1.5); box-shadow: 0 0 4px #fff4; }
+@keyframes pinpulse { 0%,100%{box-shadow:0 0 6px #6366f1} 50%{box-shadow:0 0 12px #6366f1,0 0 20px #6366f160} }
+
+/* ─── Components ──────────────────────────────── */
+.sim-component { position: absolute; cursor: grab; }
+.sim-component:active { cursor: grabbing; }
+.sim-component.selected { outline: 2px dashed #6366f1; outline-offset: 4px; border-radius: 4px; }
+.sim-comp-remove {
+  position: absolute; top: -8px; right: -8px;
+  width: 16px; height: 16px; border-radius: 50%;
+  background: #ef4444; color: #fff; border: none; cursor: pointer;
+  font-size: 11px; display: flex; align-items: center; justify-content: center;
+  z-index: 30; font-weight: 700; line-height: 1;
+}
+.sim-comp-remove:hover { background: #dc2626; }
+
+/* ─── Pin Tooltip ─────────────────────────────── */
+.sim-pin-tooltip {
+  position: absolute;
+  background: #1e2030; color: #e2e8f0; border: 1px solid #374151;
+  border-radius: 4px; padding: 2px 7px; font-size: 11px;
+  font-family: monospace; pointer-events: none; white-space: nowrap;
+  box-shadow: 0 4px 12px #000; z-index: 100;
+}
+
+/* ─── Wiring Badge ────────────────────────────── */
+.sim-wiring-badge {
+  position: absolute; bottom: 36px; left: 50%; transform: translateX(-50%);
+  background: #1e1e48; color: #a5b4fc; border: 1px solid #4338ca;
+  border-radius: 6px; padding: 5px 14px; font-size: 12px;
+  pointer-events: none; white-space: nowrap; z-index: 50;
+  box-shadow: 0 4px 16px #00000080;
+}
+
+/* ─── Zoom Controls ───────────────────────────── */
+.sim-zoom-controls {
+  position: absolute; bottom: 10px; right: 10px;
+  display: flex; align-items: center; gap: 4px;
+  background: #0f1117; border: 1px solid #1e2030;
+  border-radius: 6px; padding: 3px 6px;
+}
+.sim-zoom-btn {
+  width: 22px; height: 22px; background: #1e2030; color: #9ca3af;
+  border: none; border-radius: 4px; cursor: pointer; font-size: 14px;
+  display: flex; align-items: center; justify-content: center; transition: all 0.1s;
+}
+.sim-zoom-btn:hover { background: #374151; color: #e2e8f0; }
+.sim-zoom-level { font-size: 10px; color: #6b7280; font-family: monospace; min-width: 36px; text-align: center; }
+
+/* ─── Canvas Hint ─────────────────────────────── */
+.sim-canvas-hint {
+  position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%);
+  font-size: 10px; color: #374151; pointer-events: none;
+  display: flex; gap: 8px; white-space: nowrap;
+}
+
+/* ─── Bottom Panel ────────────────────────────── */
+.sim-bottom-panel { display: flex; flex-direction: column; flex-shrink: 0; background: #0c0e1a; border-top: 1px solid #1e2030; }
+.sim-bottom-panel.open { height: 180px; }
+.sim-bottom-panel.closed { height: 32px; }
+
+.sim-bottom-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 8px; height: 32px; min-height: 32px; background: #0f1117;
+  border-bottom: 1px solid #1e2030; flex-shrink: 0;
+}
+.sim-bottom-tabs { display: flex; align-items: center; }
+.sim-tab {
+  display: flex; align-items: center; gap: 6px;
+  padding: 0 14px; height: 32px; font-size: 11px; font-weight: 600;
+  color: #4b5563; background: transparent; border: none; cursor: pointer;
+  border-bottom: 2px solid transparent; transition: all 0.15s;
+}
+.sim-tab:hover { color: #9ca3af; }
+.sim-tab.active { color: #e2e8f0; border-bottom-color: #6366f1; }
+
+.sim-bottom-actions { display: flex; align-items: center; gap: 4px; }
+
+/* ─── Serial Monitor ──────────────────────────── */
+.sim-serial-monitor { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
+.sim-log-container {
+  flex: 1; overflow-y: auto; padding: 6px 0; font-family: 'JetBrains Mono','Fira Code',monospace; font-size: 11.5px;
+}
+.sim-log-container::-webkit-scrollbar { width: 6px; }
+.sim-log-container::-webkit-scrollbar-track { background: #0c0e1a; }
+.sim-log-container::-webkit-scrollbar-thumb { background: #1e2030; border-radius: 3px; }
+.sim-log-container::-webkit-scrollbar-thumb:hover { background: #374151; }
+
+.sim-log-line {
+  display: flex; align-items: baseline; gap: 8px;
+  padding: 1.5px 14px; transition: background 0.1s; border-left: 2px solid transparent;
+}
+.sim-log-line:hover { background: #0f1117; }
+.sim-log-time { color: #374151; font-size: 10px; flex-shrink: 0; }
+
+.sim-log-badge { font-size: 9px; font-weight: 800; padding: 0 4px; border-radius: 2px; letter-spacing: 0.4px; flex-shrink: 0; }
+.sim-log-badge.sys { background: #1e2030; color: #6b7280; }
+.sim-log-badge.ok  { background: #0d2818; color: #10b981; }
+.sim-log-badge.err { background: #2d0d0d; color: #ef4444; }
+.sim-log-badge.inf { background: #0d1a2d; color: #60a5fa; }
+
+.sim-log-msg { color: #94a3b8; flex: 1; }
+
+.sim-log-system  .sim-log-msg { color: #6b7280; }
+.sim-log-success .sim-log-msg { color: #10b981; }
+.sim-log-success { border-left-color: #10b981; }
+.sim-log-error   .sim-log-msg { color: #ef4444; }
+.sim-log-error   { border-left-color: #ef4444; }
+.sim-log-warning .sim-log-msg { color: #f59e0b; }
+.sim-log-warning { border-left-color: #f59e0b; }
+.sim-log-highlight .sim-log-msg { color: #34d399; font-weight: 600; }
+.sim-log-highlight { border-left-color: #34d399; }
+.sim-log-serial  .sim-log-msg { color: #a78bfa; }
+.sim-log-serial  { border-left-color: #7c3aed; }
+.sim-log-gpio    .sim-log-msg { color: #60a5fa; }
+.sim-log-gpio    { border-left-color: #3b82f6; }
+.sim-log-delay   .sim-log-msg { color: #fb923c; font-style: italic; }
+.sim-log-delay   { border-left-color: #ea580c; }
+.sim-log-output  .sim-log-msg { color: #e2e8f0; }
+
+.sim-log-cursor { display: flex; align-items: center; gap: 8px; padding: 1.5px 14px; color: #374151; font-size: 10px; }
+.sim-cursor-blink { color: #6366f1; animation: blink 1s step-end infinite; }
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+
+.sim-serial-empty {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  height: 100%; gap: 8px; color: #374151; font-size: 12px;
+}
+
+/* ─── Component Palette ───────────────────────── */
+.sim-palette-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+  z-index: 200; display: flex; align-items: flex-start; justify-content: center;
+  padding-top: 60px; backdrop-filter: blur(2px);
+}
+.sim-palette {
+  background: #0f1117; border: 1px solid #1e2030; border-radius: 10px;
+  width: 520px; max-height: 70vh; display: flex; flex-direction: column;
+  box-shadow: 0 20px 60px #000, 0 0 0 1px #1e2030;
+  overflow: hidden;
+}
+.sim-palette-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 16px; border-bottom: 1px solid #1e2030; flex-shrink: 0;
+}
+.sim-palette-title { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 700; color: #e2e8f0; }
+.sim-palette-close { background: transparent; border: none; cursor: pointer; color: #6b7280; padding: 4px; border-radius: 4px; display: flex; }
+.sim-palette-close:hover { background: #1e2030; color: #e2e8f0; }
+.sim-palette-search {
+  margin: 10px 14px; padding: 8px 12px; background: #0c0e1a;
+  border: 1px solid #1e2030; border-radius: 6px; color: #e2e8f0;
+  font-size: 12px; outline: none; flex-shrink: 0;
+  transition: border-color 0.15s;
+}
+.sim-palette-search:focus { border-color: #6366f1; }
+.sim-palette-body { overflow-y: auto; padding: 0 14px 14px; }
+.sim-palette-body::-webkit-scrollbar { width: 4px; }
+.sim-palette-body::-webkit-scrollbar-thumb { background: #1e2030; }
+.sim-palette-category { margin-bottom: 16px; }
+.sim-palette-cat-title { display: flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 700; color: #6b7280; letter-spacing: 0.6px; padding: 6px 0 8px; border-bottom: 1px solid #1e2030; margin-bottom: 8px; }
+.sim-palette-items { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.sim-palette-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 10px; border-radius: 7px; background: #0c0e1a;
+  border: 1px solid #1e2030; cursor: pointer; text-align: left; transition: all 0.15s;
+}
+.sim-palette-item:hover { background: #1a1d2e; border-color: #6366f1; }
+.sim-palette-item-info { display: flex; flex-direction: column; gap: 2px; }
+.sim-palette-item-name { font-size: 11px; font-weight: 700; color: #e2e8f0; }
+.sim-palette-item-desc { font-size: 9px; color: #6b7280; }
+
+/* ─── MCU Integration button ──────────────────── */
+.sim-launch-btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 8px 18px; border-radius: 8px;
+  background: linear-gradient(135deg,#4f46e5,#6366f1);
+  color: #fff; font-size: 13px; font-weight: 700;
+  border: none; cursor: pointer; text-decoration: none;
+  transition: all 0.2s; box-shadow: 0 4px 14px #6366f130;
+}
+.sim-launch-btn:hover { filter: brightness(1.15); box-shadow: 0 6px 20px #6366f150; transform: translateY(-1px); }
+
+/* ─── Scrollbar global ────────────────────────── */
+.sim-root * { box-sizing: border-box; }

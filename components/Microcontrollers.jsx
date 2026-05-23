@@ -175,6 +175,52 @@ function Microcontrollers() {
               ))}
             </div>
 
+            {/* ── Simulator Launch Banner ── */}
+            <div className="mb-10 rounded-2xl overflow-hidden border border-purple-200 bg-gradient-to-br from-[#0c0e1a] to-[#141827] shadow-xl relative">
+              <div className="absolute inset-0 bg-gradient-to-r from-purple-500/10 via-indigo-500/5 to-transparent pointer-events-none"/>
+              <div className="p-8 flex flex-col md:flex-row items-center gap-8 relative z-10">
+                <div className="flex-shrink-0">
+                  {/* Animated chip icon */}
+                  <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-indigo-900 to-purple-900 border border-indigo-700 flex items-center justify-center shadow-lg shadow-indigo-900/40">
+                    <svg width="38" height="38" viewBox="0 0 32 32" fill="none">
+                      <rect x="8" y="8" width="16" height="16" rx="2" fill="none" stroke="#818cf8" strokeWidth="1.5"/>
+                      <circle cx="11" cy="11" r="1.2" fill="#818cf8"/>
+                      <circle cx="21" cy="11" r="1.2" fill="#818cf8"/>
+                      <circle cx="11" cy="21" r="1.2" fill="#818cf8"/>
+                      <circle cx="21" cy="21" r="1.2" fill="#818cf8"/>
+                      <rect x="13" y="13" width="6" height="6" rx="1" fill="#6366f1"/>
+                      <line x1="8" y1="16" x2="4" y2="16" stroke="#818cf8" strokeWidth="1.5"/>
+                      <line x1="24" y1="16" x2="28" y2="16" stroke="#818cf8" strokeWidth="1.5"/>
+                      <line x1="16" y1="8" x2="16" y2="4" stroke="#818cf8" strokeWidth="1.5"/>
+                      <line x1="16" y1="24" x2="16" y2="28" stroke="#818cf8" strokeWidth="1.5"/>
+                    </svg>
+                  </div>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="text-xs font-bold tracking-widest uppercase text-indigo-400 font-mono">NEW</span>
+                    <span className="w-1 h-1 rounded-full bg-indigo-600"/>
+                    <span className="text-xs text-indigo-400 font-mono">Browser-based · No install needed</span>
+                  </div>
+                  <h3 className="text-white text-2xl font-bold mb-2">STM32 Simulator</h3>
+                  <p className="text-slate-400 text-sm leading-relaxed max-w-lg">
+                    Write real C/HAL code in the Monaco editor, press Play — and watch the virtual STM32F103C8 Blue Pill execute it live. GPIO pins respond, the onboard LED blinks, and the Serial Monitor streams your <code className="text-indigo-300">printf()</code> output in real-time.
+                  </p>
+                  <div className="flex flex-wrap gap-3 mt-5 items-center">
+                    <a href="/simulator" className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold transition-all shadow-lg shadow-indigo-900/40 hover:shadow-indigo-600/40 hover:-translate-y-0.5">
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                      Launch Simulator
+                    </a>
+                    <div className="flex gap-3 text-xs text-slate-500 font-mono">
+                      {['HAL API','GPIO','printf()','LED Blink','Delay'].map(f=>(
+                        <span key={f} className="px-2 py-1 rounded bg-slate-800 border border-slate-700 text-slate-400">{f}</span>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
             <div className="grid md:grid-cols-2 gap-8">
               <div>
                 <div className="inline-flex items-center gap-3 mb-6 font-semibold text-sm tracking-widest uppercase text-primary-600">
