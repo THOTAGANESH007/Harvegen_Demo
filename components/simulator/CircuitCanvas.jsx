@@ -2,6 +2,7 @@
 
 import { useState, useRef, useCallback } from 'react'
 import { ComponentIcon } from './ComponentPalette'
+import { COMPONENT_PINS, parseEndpoint, isRailPin } from './componentPins'
 
 export default function CircuitCanvas({
   components, connections, simState, gpioState,
@@ -16,6 +17,7 @@ export default function CircuitCanvas({
   const [hoveredPin, setHoveredPin] = useState(null)
   const [wiringFrom, setWiringFrom] = useState(null)
   const [selectedComp, setSelectedComp] = useState(null)
+  const [selectedWire, setSelectedWire] = useState(null)
   const [draggingComp, setDraggingComp] = useState(null)
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 })
   const [ghostRotation, setGhostRotation] = useState(0)
@@ -35,6 +37,16 @@ export default function CircuitCanvas({
     setScale(s => Math.max(0.4, Math.min(4, s * (e.deltaY > 0 ? 0.9 : 1.1))))
   }, [])
 
+  // Cancel wiring or clear active selections on empty-canvas CLICK
+  const handleCanvasClick = useCallback(() => {
+    if (wiringFrom) {
+      setWiringFrom(null)
+    } else {
+      setSelectedComp(null)
+      setSelectedWire(null)
+    }
+  }, [wiringFrom])
+
   const handleMouseDown = useCallback((e) => {
     // Place pending component on left click
     if (pendingComponent && e.button === 0 && !e.altKey) {
@@ -48,10 +60,7 @@ export default function CircuitCanvas({
       setPanStart({ x: e.clientX - offset.x, y: e.clientY - offset.y })
       e.preventDefault()
     }
-    if (e.button === 0 && !e.altKey && wiringFrom) {
-      setWiringFrom(null)
-    }
-  }, [offset, wiringFrom, pendingComponent, onPlaceComponent, toCanvas, ghostRotation])
+  }, [offset, pendingComponent, onPlaceComponent, toCanvas, ghostRotation])
 
   const handleMouseMove = useCallback((e) => {
     const rect = canvasRef.current?.getBoundingClientRect()
@@ -67,13 +76,27 @@ export default function CircuitCanvas({
 
   const handleKeyDown = useCallback((e) => {
     if (e.key === 'Escape') {
-      if (pendingComponent) { onCancelPlace(); setGhostRotation(0) }
-      else setWiringFrom(null)
+      if (pendingComponent) {
+        onCancelPlace()
+        setGhostRotation(0)
+      } else {
+        setWiringFrom(null)
+        setSelectedWire(null)
+      }
     }
     if (e.key === 'r' || e.key === 'R') {
       if (pendingComponent) setGhostRotation(r => (r + 90) % 360)
     }
-  }, [])
+    if (e.key === 'Delete' || e.key === 'Backspace') {
+      if (selectedComp) {
+        onRemoveComponent(selectedComp)
+        setSelectedComp(null)
+      } else if (selectedWire) {
+        onConnectionsChange(prev => prev.filter(c => c.id !== selectedWire))
+        setSelectedWire(null)
+      }
+    }
+  }, [pendingComponent, onCancelPlace, selectedComp, onRemoveComponent, selectedWire, onConnectionsChange])
 
   // ─── STM32 Board Pin Definitions ─────────────────────────────────────────
   const BOARD_W = 90
@@ -122,63 +145,94 @@ export default function CircuitCanvas({
     }
   }
 
-  // ─── Resolve any endpoint id to a world {x,y} position ──────────────────
+  // ─── Resolve endpoint ("PA0" or "led-123:A") to screen {x,y} ─────────────
   const resolveEndpointPos = (endpointId) => {
-    // Try board pin first
+    if (!endpointId) return null
+
+    // Board pin: PA0, GND, 3V3, etc.
     const boardPos = getBoardPinWorldPos(endpointId)
     if (boardPos) return boardPos
-    // Try component
+
+    // Component pin: "compId:pinId"
+    if (endpointId.includes(':')) {
+      const { compId, pinId } = parseEndpoint(endpointId)
+      const comp = components.find(c => c.id === compId)
+      if (!comp) return null
+      const schema = COMPONENT_PINS[comp.type]
+      const pinDef = schema?.pins.find(p => p.id === pinId)
+      if (!pinDef) return null
+      return {
+        x: offset.x + (comp.x + pinDef.offsetX) * scale,
+        y: offset.y + (comp.y + pinDef.offsetY) * scale,
+      }
+    }
+
+    // Legacy fallback: whole component (single bottom dot)
     const comp = components.find(c => c.id === endpointId)
-    if (comp) return getCompPinPos(comp)
+    if (comp) return {
+      x: offset.x + (comp.x + 8) * scale,
+      y: offset.y + (comp.y + getCompHeight(comp)) * scale + 6 * scale,
+    }
     return null
   }
 
-  // ─── Wiring: start from a board pin ──────────────────────────────────────
-  const handleBoardPinClick = useCallback((pinId) => {
+  // ─── Wiring: unified handler with connection-limit enforcement ─────────────
+  const handleWireClick = useCallback((e, endpointId) => {
+    e.stopPropagation()
+    if (pendingComponent) return
+
     if (!wiringFrom) {
-      setWiringFrom({ id: pinId, type: 'board', label: pinId })
+      setWiringFrom(endpointId)
       return
     }
-    // Complete wire: board-pin → board-pin (same pin = cancel)
-    if (wiringFrom.id !== pinId) {
-      onConnectionsChange(prev => [...prev, {
-        id: `c-${Date.now()}`, from: wiringFrom.id, to: pinId, color: '#6366f1'
-      }])
-    }
-    setWiringFrom(null)
-  }, [wiringFrom, onConnectionsChange])
 
-  // ─── Wiring: click on a placed component ─────────────────────────────────
+    // Clicked same endpoint = cancel
+    if (wiringFrom === endpointId) {
+      setWiringFrom(null)
+      return
+    }
+
+    // Enforce: one wire per pin (GND/3V3 board pins allow multiple)
+    const isPinAlreadyUsed = (epId) => {
+      if (isRailPin(epId)) return false  // power rails allow multiple wires
+      return connections.some(c => c.from === epId || c.to === epId)
+    }
+    if (isPinAlreadyUsed(wiringFrom)) {
+      alert(`Pin "${wiringFrom}" already has a wire connected!`)
+      setWiringFrom(null)
+      return
+    }
+    if (isPinAlreadyUsed(endpointId)) {
+      alert(`Pin "${endpointId.includes(':') ? endpointId.split(':')[1] : endpointId}" already has a wire connected!`)
+      setWiringFrom(null)
+      return
+    }
+
+    // Pick wire color based on pin type
+    const getWireColor = (epId) => {
+      if (epId === 'GND' || epId.endsWith(':GND') || epId.endsWith(':K') || epId.endsWith(':-')) return '#60a5fa'
+      if (epId === '3V3' || epId.endsWith(':VCC') || epId.endsWith(':+')) return '#ef4444'
+      if (epId.endsWith(':SDA')) return '#a78bfa'
+      if (epId.endsWith(':SCL')) return '#818cf8'
+      return '#69f0ae'  // signal/data = green
+    }
+    const color = getWireColor(endpointId) !== '#69f0ae' ? getWireColor(endpointId) : getWireColor(wiringFrom)
+
+    onConnectionsChange(prev => [...prev, {
+      id: `c-${Date.now()}`, from: wiringFrom, to: endpointId, color
+    }])
+    setWiringFrom(null)
+  }, [wiringFrom, connections, onConnectionsChange, pendingComponent])
+
+  // ─── Component body click: select OR complete wire ───────────────────────
   const handleCompClick = useCallback((e, compId) => {
     e.stopPropagation()
-    if (!wiringFrom) {
-      // Not wiring — select the component instead
+    if (wiringFrom) {
+      handleWireClick(e, compId)
+    } else {
       setSelectedComp(prev => prev === compId ? null : compId)
-      return
     }
-    // Complete wire: wiringFrom → component
-    if (wiringFrom.id !== compId) {
-      onConnectionsChange(prev => [...prev, {
-        id: `c-${Date.now()}`, from: wiringFrom.id, to: compId, color: '#6366f1'
-      }])
-    }
-    setWiringFrom(null)
-  }, [wiringFrom, onConnectionsChange])
-
-  // ─── Wiring: click on a component's own pin dot ──────────────────────────
-  const handleCompPinClick = useCallback((e, compId) => {
-    e.stopPropagation()
-    if (!wiringFrom) {
-      setWiringFrom({ id: compId, type: 'comp', label: compId })
-      return
-    }
-    if (wiringFrom.id !== compId) {
-      onConnectionsChange(prev => [...prev, {
-        id: `c-${Date.now()}`, from: wiringFrom.id, to: compId, color: '#6366f1'
-      }])
-    }
-    setWiringFrom(null)
-  }, [wiringFrom, onConnectionsChange])
+  }, [wiringFrom, handleWireClick])
 
   return (
     <div
@@ -189,8 +243,9 @@ export default function CircuitCanvas({
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
       onKeyDown={handleKeyDown}
+      onClick={handleCanvasClick}
       tabIndex={0}
-      style={{ cursor: isPanning ? 'grabbing' : wiringFrom ? 'crosshair' : 'default', outline: 'none' }}
+      style={{ cursor: isPanning ? 'grabbing' : (pendingComponent || wiringFrom) ? 'crosshair' : 'default', outline: 'none' }}
     >
       {/* Dot Grid */}
       <svg style={{ position:'absolute', inset:0, width:'100%', height:'100%', pointerEvents:'none' }}>
@@ -203,30 +258,7 @@ export default function CircuitCanvas({
         <rect width="100%" height="100%" fill="url(#dotgrid)"/>
       </svg>
 
-      {/* Wire SVG layer */}
-      <svg style={{ position:'absolute', inset:0, width:'100%', height:'100%', pointerEvents:'none', zIndex:15 }}>
-        {connections.map(conn => {
-          const from = resolveEndpointPos(conn.from)
-          const to   = resolveEndpointPos(conn.to)
-          if (!from || !to) return null
-          const mx = (from.x + to.x) / 2
-          return (
-            <path key={conn.id}
-              d={`M${from.x},${from.y} C${mx},${from.y} ${mx},${to.y} ${to.x},${to.y}`}
-              fill="none" stroke={conn.color || '#6366f1'} strokeWidth="2" strokeLinecap="round"
-              style={{ filter:`drop-shadow(0 0 3px ${conn.color||'#6366f1'}80)` }}
-            />
-          )
-        })}
-        {/* Live wire preview while routing */}
-        {wiringFrom && (() => {
-          const from = resolveEndpointPos(wiringFrom.id)
-          if (!from) return null
-          return <line x1={from.x} y1={from.y} x2={mousePos.x} y2={mousePos.y}
-            stroke="#6366f1" strokeWidth="2" strokeDasharray="6 3"
-            style={{ filter:'drop-shadow(0 0 4px #6366f1)' }}/>
-        })()}
-      </svg>
+
 
       {/* STM32 Blue Pill Board */}
       <div style={{
@@ -279,7 +311,7 @@ export default function CircuitCanvas({
             const y = (PIN_START_Y + i*PIN_SPACING)*scale
             const isGnd = pinId === 'GND'
             const isPwr = pinId === '3V3'
-            const isActive = wiringFrom?.id === pinId
+            const isActive = wiringFrom === pinId
             return (
               <div key={pinId} style={{ position:'absolute', left: 0, top: y - 3*scale, display:'flex', alignItems:'center', gap: 2*scale }}>
                 <div
@@ -287,7 +319,7 @@ export default function CircuitCanvas({
                   style={{ width:6*scale, height:6*scale, borderRadius:'50%', cursor:'crosshair' }}
                   onMouseEnter={() => setHoveredPin(pinId)}
                   onMouseLeave={() => setHoveredPin(null)}
-                  onClick={(e) => { e.stopPropagation(); handleBoardPinClick(pinId) }}
+                  onClick={(e) => handleWireClick(e, pinId)}
                   title={pinId}
                 />
                 <span style={{ fontSize: 4*scale, color:'#94a3b8', fontFamily:'monospace', userSelect:'none' }}>{pinId}</span>
@@ -301,7 +333,7 @@ export default function CircuitCanvas({
             const isGnd = pinId === 'GND'
             const isPwr = pinId === '3V3'
             const isPC13 = pinId === 'PC13'
-            const isActive = wiringFrom?.id === pinId
+            const isActive = wiringFrom === pinId
             return (
               <div key={`r-${pinId}-${i}`} style={{ position:'absolute', right:0, top: y - 3*scale, display:'flex', alignItems:'center', flexDirection:'row-reverse', gap:2*scale }}>
                 <div
@@ -309,7 +341,7 @@ export default function CircuitCanvas({
                   style={{ width:6*scale, height:6*scale, borderRadius:'50%', cursor:'crosshair' }}
                   onMouseEnter={() => setHoveredPin(pinId)}
                   onMouseLeave={() => setHoveredPin(null)}
-                  onClick={(e) => { e.stopPropagation(); handleBoardPinClick(pinId) }}
+                  onClick={(e) => handleWireClick(e, pinId)}
                   title={pinId}
                 />
                 <span style={{ fontSize:4*scale, color:'#94a3b8', fontFamily:'monospace', userSelect:'none' }}>{pinId}</span>
@@ -330,8 +362,8 @@ export default function CircuitCanvas({
         const pinMatch = boardPin ? boardPin.match(/^P([ABC])(\d+)$/) : null
         const pinVal = pinMatch ? gpioState?.[pinMatch[1]]?.[parseInt(pinMatch[2])] : undefined
         const compLedOn = simState === 'running' && comp.type === 'led' && pinVal === 0
-        const isWireTarget = !!wiringFrom && wiringFrom.id !== comp.id
-        const isWiringSource = wiringFrom?.id === comp.id
+        const isWiringSource = wiringFrom === comp.id
+        const isWireTarget = !!wiringFrom && wiringFrom !== comp.id
 
         return (
           <div key={comp.id}
@@ -412,26 +444,43 @@ export default function CircuitCanvas({
               </div>
             )}
 
-            {/* Component pin dot — click to start/end a wire from this component */}
-            <div
-              title={`Wire from ${comp.label}`}
-              onClick={(e) => handleCompPinClick(e, comp.id)}
-              style={{
-                position:'absolute',
-                bottom: -8*scale,
-                left: '50%',
-                transform: 'translateX(-50%)',
-                width: 6*scale,
-                height: 6*scale,
-                borderRadius: '50%',
-                background: isWiringSource ? '#69f0ae' : isWireTarget ? '#6366f1' : '#546e7a',
-                border: `${1.5*scale}px solid ${isWiringSource ? '#69f0ae' : isWireTarget ? '#818cf8' : '#334155'}`,
-                boxShadow: isWireTarget ? `0 0 ${4*scale}px #6366f180` : 'none',
-                cursor: 'crosshair',
-                zIndex: 30,
-                transition: 'background 0.15s, box-shadow 0.15s',
-              }}
-            />
+            {/* Per-pin dots from schema — correct hardware pin positions */}
+            {(() => {
+              const schema = COMPONENT_PINS[comp.type]
+              if (!schema) return null
+              return schema.pins.map(pin => {
+                const epId = `${comp.id}:${pin.id}`
+                const isSource = wiringFrom === epId
+                const isTarget = !!wiringFrom && wiringFrom !== epId
+                const isUsed = connections.some(c => c.from === epId || c.to === epId)
+                return (
+                  <div
+                    key={pin.id}
+                    title={`${pin.label}\n${pin.description}${isUsed ? ' [CONNECTED]' : ''}`}
+                    onClick={(e) => {
+                      if (isUsed && !wiringFrom) return  // already wired, only allow as target
+                      handleWireClick(e, epId)
+                    }}
+                    style={{
+                      position: 'absolute',
+                      left: pin.offsetX * scale,
+                      top: pin.offsetY * scale,
+                      width: 7 * scale,
+                      height: 7 * scale,
+                      borderRadius: '50%',
+                      background: isUsed ? '#2d4a2d' : isSource ? '#69f0ae' : isTarget ? pin.color : pin.color,
+                      border: `${Math.max(1, 1.5 * scale)}px solid ${isSource ? '#69f0ae' : isUsed ? '#1b3a1b' : '#1a1a2e'}`,
+                      boxShadow: isSource ? `0 0 ${6 * scale}px #69f0ae` : isTarget ? `0 0 ${4 * scale}px ${pin.color}` : 'none',
+                      opacity: isUsed ? 0.5 : 1,
+                      cursor: isUsed && !wiringFrom ? 'not-allowed' : 'crosshair',
+                      zIndex: 35,
+                      transform: 'translate(-50%, -50%)',
+                      transition: 'all 0.15s',
+                    }}
+                  />
+                )
+              })
+            })()}
 
             {/* Remove button when selected */}
             {selectedComp === comp.id && (
@@ -469,9 +518,84 @@ export default function CircuitCanvas({
       {/* Wiring mode indicator */}
       {wiringFrom && (
         <div className="sim-wiring-badge">
-          🔌 Wiring from <strong>{wiringFrom.label}</strong> — click a board pin or component to connect
+          🔌 Wiring from <strong>{wiringFrom}</strong> — click a board pin or component to connect
         </div>
       )}
+
+      {/* Wire SVG — rendered LAST so it paints above board and components */}
+      <svg style={{
+        position: 'absolute', inset: 0, width: '100%', height: '100%',
+        pointerEvents: 'none', zIndex: 999, overflow: 'visible'
+      }}>
+        {connections.map(conn => {
+          const from = resolveEndpointPos(conn.from)
+          const to   = resolveEndpointPos(conn.to)
+          if (!from || !to) return null
+          const mx = (from.x + to.x) / 2
+          const color = conn.color || '#818cf8'
+          const isSelected = selectedWire === conn.id
+          
+          return (
+            <g key={conn.id}>
+              {/* Thick invisible interaction target for easy clicking and hover */}
+              <path
+                d={`M${from.x},${from.y} C${mx},${from.y} ${mx},${to.y} ${to.x},${to.y}`}
+                fill="none"
+                stroke="transparent"
+                strokeWidth="14"
+                strokeLinecap="round"
+                style={{ pointerEvents: 'stroke', cursor: 'pointer' }}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setSelectedComp(null)
+                  setSelectedWire(prev => prev === conn.id ? null : conn.id)
+                }}
+                onDoubleClick={(e) => {
+                  e.stopPropagation()
+                  onConnectionsChange(prev => prev.filter(c => c.id !== conn.id))
+                  setSelectedWire(null)
+                }}
+                title="Click to select | Double-click to delete wire"
+              />
+              {/* Glow layer */}
+              <path
+                d={`M${from.x},${from.y} C${mx},${from.y} ${mx},${to.y} ${to.x},${to.y}`}
+                fill="none"
+                stroke={isSelected ? '#f59e0b' : color}
+                strokeWidth={isSelected ? "8" : "6"}
+                strokeOpacity={isSelected ? "0.6" : "0.25"}
+                strokeLinecap="round"
+                style={{ pointerEvents: 'none' }}
+              />
+              {/* Main wire */}
+              <path
+                d={`M${from.x},${from.y} C${mx},${from.y} ${mx},${to.y} ${to.x},${to.y}`}
+                fill="none"
+                stroke={isSelected ? '#fbbf24' : color}
+                strokeWidth="2.5"
+                strokeLinecap="round"
+                style={{ pointerEvents: 'none' }}
+              />
+              {/* Endpoint dots */}
+              <circle cx={from.x} cy={from.y} r="4" fill={isSelected ? '#fbbf24' : color} style={{ pointerEvents: 'none' }} />
+              <circle cx={to.x} cy={to.y} r="4" fill={isSelected ? '#fbbf24' : color} style={{ pointerEvents: 'none' }} />
+            </g>
+          )
+        })}
+        {/* Live dashed preview while routing */}
+        {wiringFrom && (() => {
+          const from = resolveEndpointPos(wiringFrom)
+          if (!from) return null
+          const mx = (from.x + mousePos.x) / 2
+          return (
+            <g>
+              <path d={`M${from.x},${from.y} C${mx},${from.y} ${mx},${mousePos.y} ${mousePos.x},${mousePos.y}`}
+                fill="none" stroke="#818cf8" strokeWidth="2" strokeDasharray="8 4" strokeLinecap="round" strokeOpacity="0.85" />
+              <circle cx={from.x} cy={from.y} r="5" fill="#818cf8" opacity="0.9" />
+            </g>
+          )
+        })()}
+      </svg>
 
       {/* Ghost component — follows cursor during placement */}
       {pendingComponent && (

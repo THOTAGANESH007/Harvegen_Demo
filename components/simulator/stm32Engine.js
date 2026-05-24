@@ -417,20 +417,69 @@ export function generateCodeFromCircuit(components, connections) {
     ].join('\n')
   }
 
-  // Build pin→component mapping
-  const pinMap = {} // pinId → component
-  conns.forEach(conn => {
-    const comp = comps.find(c => c.id === conn.to || c.id === conn.from)
-    if (!comp) return
-    const pinId = (conn.from || '').startsWith('P') ? conn.from : conn.to
-    if (pinId) pinMap[pinId] = comp
+  // Helper to trace connection through passive components like resistors
+  function traceConnection(startPin) {
+    let current = startPin
+    const visited = new Set([current])
+    
+    while (true) {
+      const conn = conns.find(c => 
+        (c.from === current && !visited.has(c.to)) || 
+        (c.to === current && !visited.has(c.from))
+      )
+      if (!conn) break
+      
+      const next = conn.from === current ? conn.to : conn.from
+      visited.add(next)
+      
+      // If it's a resistor terminal, jump to the other terminal
+      if (next.includes(':')) {
+        const parts = next.split(':')
+        const compId = parts[0]
+        const pinId = parts[1]
+        const comp = comps.find(c => c.id === compId)
+        if (comp && comp.type === 'resistor') {
+          const otherPinId = pinId === '1' ? '2' : '1'
+          current = `${compId}:${otherPinId}`
+          visited.add(current)
+          continue
+        }
+      }
+      current = next
+    }
+    return current
+  }
+
+  // Build pin -> component mapping using path tracing
+  const pinMap = {} // boardPin -> { comp, pinId }
+  const boardPins = conns
+    .map(c => c.from)
+    .concat(conns.map(c => c.to))
+    .filter(ep => ep.startsWith('P') || ep === 'GND' || ep === '3V3')
+  
+  const uniqueBoardPins = [...new Set(boardPins)]
+  
+  uniqueBoardPins.forEach(bp => {
+    const target = traceConnection(bp)
+    if (target && target.includes(':')) {
+      const parts = target.split(':')
+      const comp = comps.find(c => c.id === parts[0])
+      if (comp) {
+        pinMap[bp] = { comp, pinId: parts[1] }
+      }
+    } else if (target && target !== bp) {
+      const comp = comps.find(c => c.id === target)
+      if (comp) {
+        pinMap[bp] = { comp, pinId: null }
+      }
+    }
   })
 
   const outputs = []   // pins driving output components (LEDs, buzzers)
   const inputs = []    // pins reading input components (buttons, pots)
   const adcPins = []   // ADC-capable pins with analog components
 
-  for (const [pinId, comp] of Object.entries(pinMap)) {
+  for (const [pinId, { comp, pinId: componentPin }] of Object.entries(pinMap)) {
     const m = pinId.match(/^P([ABC])(\d+)$/)
     if (!m) continue
     const port = m[1], pin = parseInt(m[2])
