@@ -1,10 +1,12 @@
 'use client'
 
 import { useState, useRef, useCallback } from 'react'
+import { ComponentIcon } from './ComponentPalette'
 
 export default function CircuitCanvas({
   components, connections, simState, gpioState,
-  onRemoveComponent, onConnectionsChange, onComponentsChange
+  onRemoveComponent, onConnectionsChange, onComponentsChange,
+  pendingComponent, onPlaceComponent, onCancelPlace
 }) {
   const canvasRef = useRef(null)
   const [scale, setScale] = useState(1.5)
@@ -16,6 +18,7 @@ export default function CircuitCanvas({
   const [selectedComp, setSelectedComp] = useState(null)
   const [draggingComp, setDraggingComp] = useState(null)
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 })
+  const [ghostRotation, setGhostRotation] = useState(0)
 
   // PC13 is active-low: 0 = LED ON
   const pc13 = gpioState?.C?.[13] ?? 1
@@ -33,12 +36,22 @@ export default function CircuitCanvas({
   }, [])
 
   const handleMouseDown = useCallback((e) => {
+    // Place pending component on left click
+    if (pendingComponent && e.button === 0 && !e.altKey) {
+      const pos = toCanvas(e.clientX, e.clientY)
+      onPlaceComponent({ ...pendingComponent, x: pos.x - 15, y: pos.y - 15, rotation: ghostRotation })
+      setGhostRotation(0)
+      return
+    }
     if (e.button === 1 || (e.button === 0 && e.altKey)) {
       setIsPanning(true)
       setPanStart({ x: e.clientX - offset.x, y: e.clientY - offset.y })
       e.preventDefault()
     }
-  }, [offset])
+    if (e.button === 0 && !e.altKey && wiringFrom) {
+      setWiringFrom(null)
+    }
+  }, [offset, wiringFrom, pendingComponent, onPlaceComponent, toCanvas, ghostRotation])
 
   const handleMouseMove = useCallback((e) => {
     const rect = canvasRef.current?.getBoundingClientRect()
@@ -53,47 +66,119 @@ export default function CircuitCanvas({
   const handleMouseUp = useCallback(() => { setIsPanning(false); setDraggingComp(null) }, [])
 
   const handleKeyDown = useCallback((e) => {
-    if (e.key === 'Escape') setWiringFrom(null)
+    if (e.key === 'Escape') {
+      if (pendingComponent) { onCancelPlace(); setGhostRotation(0) }
+      else setWiringFrom(null)
+    }
+    if (e.key === 'r' || e.key === 'R') {
+      if (pendingComponent) setGhostRotation(r => (r + 90) % 360)
+    }
   }, [])
 
-  // STM32 pin definitions (board coordinates at scale=1)
+  // ─── STM32 Board Pin Definitions ─────────────────────────────────────────
   const BOARD_W = 90
   const BOARD_H = 200
-  const PIN_ROWS = 14
   const PIN_SPACING = 10
   const PIN_START_Y = 28
 
-  // Left pins: PA0–PA7, PB0, PB1, PB10, PB11, GND, 3V3
   const LEFT_PINS = ['PA0','PA1','PA2','PA3','PA4','PA5','PA6','PA7','PB0','PB1','PB10','PB11','GND','3V3']
-  // Right pins
   const RIGHT_PINS = ['PA15','PA14','PA13','PA12','PA11','PA10','PA9','PA8','PB15','PB14','PB13','PB12','PC13','GND']
 
   const getPinPos = (side, index) => {
-    const bx = offset.x
-    const by = offset.y
-    const y = by + (PIN_START_Y + index * PIN_SPACING) * scale
-    if (side === 'left') return { x: bx + 2 * scale, y }
-    return { x: bx + (BOARD_W - 2) * scale, y }
+    const y = offset.y + (PIN_START_Y + index * PIN_SPACING) * scale
+    if (side === 'left') return { x: offset.x + 2 * scale, y }
+    return { x: offset.x + (BOARD_W - 2) * scale, y }
   }
 
-  const handlePinClick = useCallback((pinId) => {
-    if (!wiringFrom) { setWiringFrom(pinId); return }
-    if (wiringFrom !== pinId) {
-      onConnectionsChange(prev => [...prev, { id: `c-${Date.now()}`, from: wiringFrom, to: pinId, color: '#6366f1' }])
-    }
-    setWiringFrom(null)
-  }, [wiringFrom, onConnectionsChange])
-
-  const allPins = [
+  const allBoardPins = [
     ...LEFT_PINS.map((id, i) => ({ id, index: i, side: 'left', label: id })),
     ...RIGHT_PINS.map((id, i) => ({ id, index: i, side: 'right', label: id })),
   ]
 
-  const getPinWorldPos = (pinId) => {
-    const pin = allPins.find(p => p.id === pinId)
+  const getBoardPinWorldPos = (pinId) => {
+    const pin = allBoardPins.find(p => p.id === pinId)
     if (!pin) return null
     return getPinPos(pin.side, pin.index)
   }
+
+  // ─── Get the world position of a component's pin dot ─────────────────────
+  const getCompPinPos = (comp) => {
+    // Pin is at the bottom-left of the component (anode/input terminal)
+    const cx = offset.x + comp.x * scale
+    const cy = offset.y + comp.y * scale
+    return { x: cx + 4 * scale, y: cy + getCompHeight(comp) * scale + 4 * scale }
+  }
+
+  const getCompHeight = (comp) => {
+    switch (comp.type) {
+      case 'led':         return 30
+      case 'resistor':    return 14
+      case 'button':      return 22
+      case 'lcd':         return 30
+      case 'buzzer':      return 22
+      case 'potentiometer': return 24
+      case 'dht22':       return 40
+      default:            return 24
+    }
+  }
+
+  // ─── Resolve any endpoint id to a world {x,y} position ──────────────────
+  const resolveEndpointPos = (endpointId) => {
+    // Try board pin first
+    const boardPos = getBoardPinWorldPos(endpointId)
+    if (boardPos) return boardPos
+    // Try component
+    const comp = components.find(c => c.id === endpointId)
+    if (comp) return getCompPinPos(comp)
+    return null
+  }
+
+  // ─── Wiring: start from a board pin ──────────────────────────────────────
+  const handleBoardPinClick = useCallback((pinId) => {
+    if (!wiringFrom) {
+      setWiringFrom({ id: pinId, type: 'board', label: pinId })
+      return
+    }
+    // Complete wire: board-pin → board-pin (same pin = cancel)
+    if (wiringFrom.id !== pinId) {
+      onConnectionsChange(prev => [...prev, {
+        id: `c-${Date.now()}`, from: wiringFrom.id, to: pinId, color: '#6366f1'
+      }])
+    }
+    setWiringFrom(null)
+  }, [wiringFrom, onConnectionsChange])
+
+  // ─── Wiring: click on a placed component ─────────────────────────────────
+  const handleCompClick = useCallback((e, compId) => {
+    e.stopPropagation()
+    if (!wiringFrom) {
+      // Not wiring — select the component instead
+      setSelectedComp(prev => prev === compId ? null : compId)
+      return
+    }
+    // Complete wire: wiringFrom → component
+    if (wiringFrom.id !== compId) {
+      onConnectionsChange(prev => [...prev, {
+        id: `c-${Date.now()}`, from: wiringFrom.id, to: compId, color: '#6366f1'
+      }])
+    }
+    setWiringFrom(null)
+  }, [wiringFrom, onConnectionsChange])
+
+  // ─── Wiring: click on a component's own pin dot ──────────────────────────
+  const handleCompPinClick = useCallback((e, compId) => {
+    e.stopPropagation()
+    if (!wiringFrom) {
+      setWiringFrom({ id: compId, type: 'comp', label: compId })
+      return
+    }
+    if (wiringFrom.id !== compId) {
+      onConnectionsChange(prev => [...prev, {
+        id: `c-${Date.now()}`, from: wiringFrom.id, to: compId, color: '#6366f1'
+      }])
+    }
+    setWiringFrom(null)
+  }, [wiringFrom, onConnectionsChange])
 
   return (
     <div
@@ -118,28 +203,24 @@ export default function CircuitCanvas({
         <rect width="100%" height="100%" fill="url(#dotgrid)"/>
       </svg>
 
-      {/* Wire SVG */}
+      {/* Wire SVG layer */}
       <svg style={{ position:'absolute', inset:0, width:'100%', height:'100%', pointerEvents:'none', zIndex:15 }}>
         {connections.map(conn => {
-          const from = getPinWorldPos(conn.from)
-          const toComp = components.find(c => c.id === conn.to)
-          if (!from) return null
-          let toPos = toComp
-            ? { x: offset.x + (toComp.x + 10) * scale, y: offset.y + toComp.y * scale }
-            : getPinWorldPos(conn.to)
-          if (!toPos) return null
-          const mx = (from.x + toPos.x) / 2
+          const from = resolveEndpointPos(conn.from)
+          const to   = resolveEndpointPos(conn.to)
+          if (!from || !to) return null
+          const mx = (from.x + to.x) / 2
           return (
             <path key={conn.id}
-              d={`M${from.x},${from.y} C${mx},${from.y} ${mx},${toPos.y} ${toPos.x},${toPos.y}`}
+              d={`M${from.x},${from.y} C${mx},${from.y} ${mx},${to.y} ${to.x},${to.y}`}
               fill="none" stroke={conn.color || '#6366f1'} strokeWidth="2" strokeLinecap="round"
               style={{ filter:`drop-shadow(0 0 3px ${conn.color||'#6366f1'}80)` }}
             />
           )
         })}
-        {/* Live wire while routing */}
+        {/* Live wire preview while routing */}
         {wiringFrom && (() => {
-          const from = getPinWorldPos(wiringFrom)
+          const from = resolveEndpointPos(wiringFrom.id)
           if (!from) return null
           return <line x1={from.x} y1={from.y} x2={mousePos.x} y2={mousePos.y}
             stroke="#6366f1" strokeWidth="2" strokeDasharray="6 3"
@@ -153,7 +234,6 @@ export default function CircuitCanvas({
         width: BOARD_W*scale, height: BOARD_H*scale,
         transformOrigin:'0 0',
       }}>
-        {/* PCB */}
         <div className="sim-pcb" style={{ width:'100%', height:'100%' }}>
           {/* USB connector */}
           <div className="sim-usb" style={{ width: 18*scale, height: 14*scale, top: 4*scale, left: (BOARD_W/2-9)*scale }}>
@@ -199,15 +279,15 @@ export default function CircuitCanvas({
             const y = (PIN_START_Y + i*PIN_SPACING)*scale
             const isGnd = pinId === 'GND'
             const isPwr = pinId === '3V3'
-            const isActive = wiringFrom === pinId
+            const isActive = wiringFrom?.id === pinId
             return (
               <div key={pinId} style={{ position:'absolute', left: 0, top: y - 3*scale, display:'flex', alignItems:'center', gap: 2*scale }}>
                 <div
                   className={`sim-pin-dot ${isGnd?'gnd':isPwr?'pwr':'gpio'} ${isActive?'active':''} ${hoveredPin===pinId?'hover':''}`}
-                  style={{ width:6*scale, height:6*scale, borderRadius:'50%' }}
+                  style={{ width:6*scale, height:6*scale, borderRadius:'50%', cursor:'crosshair' }}
                   onMouseEnter={() => setHoveredPin(pinId)}
                   onMouseLeave={() => setHoveredPin(null)}
-                  onClick={() => handlePinClick(pinId)}
+                  onClick={(e) => { e.stopPropagation(); handleBoardPinClick(pinId) }}
                   title={pinId}
                 />
                 <span style={{ fontSize: 4*scale, color:'#94a3b8', fontFamily:'monospace', userSelect:'none' }}>{pinId}</span>
@@ -221,15 +301,15 @@ export default function CircuitCanvas({
             const isGnd = pinId === 'GND'
             const isPwr = pinId === '3V3'
             const isPC13 = pinId === 'PC13'
-            const isActive = wiringFrom === pinId
+            const isActive = wiringFrom?.id === pinId
             return (
               <div key={`r-${pinId}-${i}`} style={{ position:'absolute', right:0, top: y - 3*scale, display:'flex', alignItems:'center', flexDirection:'row-reverse', gap:2*scale }}>
                 <div
                   className={`sim-pin-dot ${isGnd?'gnd':isPwr?'pwr':isPC13?'pc13':'gpio'} ${isActive?'active':''} ${hoveredPin===pinId?'hover':''}`}
-                  style={{ width:6*scale, height:6*scale, borderRadius:'50%' }}
+                  style={{ width:6*scale, height:6*scale, borderRadius:'50%', cursor:'crosshair' }}
                   onMouseEnter={() => setHoveredPin(pinId)}
                   onMouseLeave={() => setHoveredPin(null)}
-                  onClick={() => handlePinClick(pinId)}
+                  onClick={(e) => { e.stopPropagation(); handleBoardPinClick(pinId) }}
                   title={pinId}
                 />
                 <span style={{ fontSize:4*scale, color:'#94a3b8', fontFamily:'monospace', userSelect:'none' }}>{pinId}</span>
@@ -241,20 +321,35 @@ export default function CircuitCanvas({
 
       {/* Draggable Components */}
       {components.map(comp => {
-        const x = offset.x + comp.x*scale
-        const y = offset.y + comp.y*scale
-        // LED: check if any connected pin is driven LOW
-        const connectedPin = connections.find(c => c.to === comp.id)?.from
-        const pinPort = connectedPin ? connectedPin.match(/^P([ABC])(\d+)$/)?.[1] : null
-        const pinNum = connectedPin ? connectedPin.match(/^P([ABC])(\d+)$/)?.[2] : null
-        const pinVal = pinPort && pinNum ? gpioState?.[pinPort]?.[parseInt(pinNum)] : undefined
-        const compLedOn = simState === 'running' && comp.type === 'led' && pinVal === (comp.activeLow ? 1 : 0)
+        const cx = offset.x + comp.x * scale
+        const cy = offset.y + comp.y * scale
+        const connectedPin = connections.find(c => c.to === comp.id || c.from === comp.id)
+        const boardPin = connectedPin
+          ? (connectedPin.from === comp.id ? connectedPin.to : connectedPin.from)
+          : null
+        const pinMatch = boardPin ? boardPin.match(/^P([ABC])(\d+)$/) : null
+        const pinVal = pinMatch ? gpioState?.[pinMatch[1]]?.[parseInt(pinMatch[2])] : undefined
+        const compLedOn = simState === 'running' && comp.type === 'led' && pinVal === 0
+        const isWireTarget = !!wiringFrom && wiringFrom.id !== comp.id
+        const isWiringSource = wiringFrom?.id === comp.id
 
         return (
           <div key={comp.id}
             className={`sim-component ${selectedComp === comp.id ? 'selected' : ''}`}
-            style={{ position:'absolute', left:x, top:y, zIndex:20, cursor:'grab' }}
-            onMouseDown={(e) => { e.stopPropagation(); setSelectedComp(comp.id); setDraggingComp(comp.id) }}
+            style={{
+              position:'absolute', left:cx, top:cy, zIndex:20,
+              cursor: wiringFrom ? 'crosshair' : 'grab',
+              outline: isWireTarget ? `2px dashed #6366f1` : isWiringSource ? `2px solid #69f0ae` : 'none',
+              outlineOffset: '3px',
+              borderRadius: 4,
+            }}
+            onMouseDown={(e) => {
+              if (wiringFrom) return  // Don't start drag during wiring
+              e.stopPropagation()
+              setSelectedComp(comp.id)
+              setDraggingComp(comp.id)
+            }}
+            onClick={(e) => handleCompClick(e, comp.id)}
           >
             {comp.type === 'led' && (
               <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:2 }}>
@@ -317,6 +412,27 @@ export default function CircuitCanvas({
               </div>
             )}
 
+            {/* Component pin dot — click to start/end a wire from this component */}
+            <div
+              title={`Wire from ${comp.label}`}
+              onClick={(e) => handleCompPinClick(e, comp.id)}
+              style={{
+                position:'absolute',
+                bottom: -8*scale,
+                left: '50%',
+                transform: 'translateX(-50%)',
+                width: 6*scale,
+                height: 6*scale,
+                borderRadius: '50%',
+                background: isWiringSource ? '#69f0ae' : isWireTarget ? '#6366f1' : '#546e7a',
+                border: `${1.5*scale}px solid ${isWiringSource ? '#69f0ae' : isWireTarget ? '#818cf8' : '#334155'}`,
+                boxShadow: isWireTarget ? `0 0 ${4*scale}px #6366f180` : 'none',
+                cursor: 'crosshair',
+                zIndex: 30,
+                transition: 'background 0.15s, box-shadow 0.15s',
+              }}
+            />
+
             {/* Remove button when selected */}
             {selectedComp === comp.id && (
               <button className="sim-comp-remove" onClick={(e)=>{e.stopPropagation();onRemoveComponent(comp.id)}}>×</button>
@@ -327,7 +443,7 @@ export default function CircuitCanvas({
 
       {/* Pin tooltip */}
       {hoveredPin && (() => {
-        const pin = allPins.find(p => p.id === hoveredPin)
+        const pin = allBoardPins.find(p => p.id === hoveredPin)
         if (!pin) return null
         const pos = getPinPos(pin.side, pin.index)
         return (
@@ -347,14 +463,40 @@ export default function CircuitCanvas({
 
       {/* Canvas hint */}
       <div className="sim-canvas-hint">
-        Alt+Drag: Pan · Scroll: Zoom · Click pin: Wire · Esc: Cancel · Click comp: Select
+        Alt+Drag: Pan · Scroll: Zoom · Click pin/component: Wire · Esc: Cancel · Click comp: Select
       </div>
 
       {/* Wiring mode indicator */}
       {wiringFrom && (
         <div className="sim-wiring-badge">
-          🔌 Wiring from <strong>{wiringFrom}</strong> — click another pin to connect
+          🔌 Wiring from <strong>{wiringFrom.label}</strong> — click a board pin or component to connect
         </div>
+      )}
+
+      {/* Ghost component — follows cursor during placement */}
+      {pendingComponent && (
+        <>
+          <div
+            style={{
+              position: 'absolute',
+              left: mousePos.x - 20,
+              top: mousePos.y - 20,
+              pointerEvents: 'none',
+              opacity: 0.7,
+              transform: `rotate(${ghostRotation}deg)`,
+              transformOrigin: 'center center',
+              zIndex: 999,
+              filter: 'drop-shadow(0 0 8px #6366f1) drop-shadow(0 0 16px #6366f180)',
+            }}
+          >
+            <ComponentIcon comp={pendingComponent} size={36} />
+          </div>
+          <div className="sim-placement-badge">
+            <span style={{ color: '#7986cb' }}>⊕</span>
+            Placing <strong>{pendingComponent.label}</strong>
+            <span style={{ color: '#546e7a', marginLeft: 8 }}>· Click to drop · R to rotate · Esc to cancel</span>
+          </div>
+        </>
       )}
     </div>
   )

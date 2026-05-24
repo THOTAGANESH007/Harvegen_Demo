@@ -371,7 +371,51 @@ export function generateCodeFromCircuit(components, connections) {
   const comps = Array.isArray(components) ? components : []
   const conns  = Array.isArray(connections) ? connections : []
 
-  if (!conns.length && !comps.length) return null
+  if (!comps.length) return null
+
+  // If nothing wired, emit a scaffold that at least boots and prints component names
+  if (!conns.length) {
+    const compList = comps.map(c => c.label || c.type).join(', ')
+    return [
+      `/**`,
+      ` * STM32F103C8 — Auto-generated scaffold`,
+      ` * Components placed: ${compList}`,
+      ` * Wire the components to GPIO pins, then click Generate Code again!`,
+      ` */`,
+      '#include "stm32f1xx_hal.h"',
+      '#include <stdio.h>',
+      '',
+      'void SystemClock_Config(void);',
+      'static void MX_GPIO_Init(void);',
+      '',
+      'int main(void)',
+      '{',
+      '  HAL_Init();',
+      '  SystemClock_Config();',
+      '  MX_GPIO_Init();',
+      '',
+      `  printf("Components: ${compList}\\n");`,
+      `  printf("Wire components to pins and click Generate Code!\\n");`,
+      '',
+      '  while (1)',
+      '  {',
+      '    HAL_Delay(1000);',
+      '  }',
+      '}',
+      '',
+      'void SystemClock_Config(void) { /* Configure 72MHz clock */ }',
+      'static void MX_GPIO_Init(void)',
+      '{',
+      '  // Onboard LED PC13',
+      '  __HAL_RCC_GPIOC_CLK_ENABLE();',
+      '  GPIO_InitTypeDef GPIO_InitStruct = {0};',
+      '  GPIO_InitStruct.Pin = GPIO_PIN_13;',
+      '  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;',
+      '  GPIO_InitStruct.Pull = GPIO_NOPULL;',
+      '  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);',
+      '}',
+    ].join('\n')
+  }
 
   // Build pin→component mapping
   const pinMap = {} // pinId → component

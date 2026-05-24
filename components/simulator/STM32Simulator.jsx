@@ -87,6 +87,7 @@ export default function STM32Simulator() {
   const [buildLogs, setBuildLogs] = useState([])
   const [activePanel, setActivePanel] = useState('serial')
   const [showPalette, setShowPalette] = useState(false)
+  const [pendingComponent, setPendingComponent] = useState(null) // Wokwi-style: pick then place
   const [panelSizes, setPanelSizes] = useState({ code: 42, canvas: 58 })
   const [bottomOpen, setBottomOpen] = useState(true)
   const [simTime, setSimTime] = useState(0)
@@ -266,52 +267,77 @@ export default function STM32Simulator() {
     delayTimers.current.forEach(clearTimeout)
   }, [])
 
+  // Keep a ref to connections so drag handler never has stale closure
+  const connectionsRef = useRef(connections)
+  useEffect(() => { connectionsRef.current = connections }, [connections])
+
   // ─── Circuit state handlers (No automatic code-gen) ───────────────────────
   const handleCircuitChanged = useCallback((newComponents, newConnections) => {
     setCircuitComponents(newComponents)
     setConnections(newConnections)
+    connectionsRef.current = newConnections
   }, [])
 
-  const handleAddComponent = useCallback((comp) => {
+  const handleAddComponent = useCallback((comp, pos) => {
+    // pos is {x,y} from canvas click; if not provided, use center
+    const x = pos?.x ?? 180 + Math.random() * 160
+    const y = pos?.y ?? 80 + Math.random() * 160
     const newComponents = [...circuitComponents, {
       ...comp,
       id: `${comp.type}-${Date.now()}`,
-      x: 180 + Math.random() * 160,
-      y: 80 + Math.random() * 160,
+      x, y,
     }]
-    handleCircuitChanged(newComponents, connections)
+    handleCircuitChanged(newComponents, connectionsRef.current)
+    setPendingComponent(null)
     setShowPalette(false)
-  }, [circuitComponents, connections, handleCircuitChanged])
+  }, [circuitComponents, handleCircuitChanged])
 
   const handleRemoveComponent = useCallback((id) => {
     const newComponents = circuitComponents.filter(c => c.id !== id)
-    const newConnections = connections.filter(c => c.from !== id && c.to !== id)
+    const newConnections = connectionsRef.current.filter(c => c.from !== id && c.to !== id)
     handleCircuitChanged(newComponents, newConnections)
-  }, [circuitComponents, connections, handleCircuitChanged])
+  }, [circuitComponents, handleCircuitChanged])
 
-  const handleConnectionsChange = useCallback((newConns) => {
+  // CircuitCanvas may pass a functional updater (prev => [...prev, newConn])
+  const handleConnectionsChange = useCallback((updaterOrArray) => {
+    const newConns = typeof updaterOrArray === 'function'
+      ? updaterOrArray(connectionsRef.current)
+      : updaterOrArray
     handleCircuitChanged(circuitComponents, newConns)
   }, [circuitComponents, handleCircuitChanged])
 
   // ─── Manual Code & Diagram Generator ─────────────────────────────────────
   const handleGenerateCode = useCallback(() => {
-    const generatedCode = generateCodeFromCircuit(circuitComponents, connections)
+    const comps = circuitComponents
+    const conns = connectionsRef.current
+
+    const generatedCode = generateCodeFromCircuit(comps, conns)
+
+    // Build diagram.json — map pin-IDs and component-IDs to Wokwi format
+    const resolveEndpoint = (endpointId) => {
+      // Is it a GPIO pin like PA0, PB13, PC13 etc? → belongs to the STM32 board
+      if (/^P[ABC]\d+$/.test(endpointId) || endpointId === 'GND' || endpointId === '3V3') {
+        return `stm1:${endpointId}`
+      }
+      // Otherwise it's a component ID
+      return `${endpointId}:A`
+    }
 
     const diagramObj = {
       version: 1,
       parts: [
-        { type: 'board-bluepill-stm32f103c8', id: 'stm1' },
-        ...circuitComponents.map(c => ({
-          type: c.type === 'led' ? `wokwi-led-${c.color || 'red'}` : c.type,
+        { type: 'board-bluepill-stm32f103c8', id: 'stm1', top: 0, left: 0, attrs: {} },
+        ...comps.map(c => ({
+          type: c.type === 'led' ? 'wokwi-led' : c.type,
           id: c.id,
-          top: c.y,
-          left: c.x,
-          attrs: { color: c.color || 'red' }
+          top: Math.round(c.y),
+          left: Math.round(c.x),
+          attrs: { color: c.color || 'red', label: c.label || c.type }
         }))
       ],
-      connections: connections.map(conn => [
-        `${conn.from.startsWith('P') ? 'stm1' : conn.from.split(':')[0]}:${conn.from.startsWith('P') ? conn.from : conn.from.split(':')[1]}`,
-        `${conn.to.startsWith('P') ? 'stm1' : conn.to.split(':')[0]}:${conn.to.startsWith('P') ? conn.to : conn.to.split(':')[1]}`,
+      connections: conns.map(conn => [
+        resolveEndpoint(conn.from),
+        resolveEndpoint(conn.to),
         conn.color || 'green',
         []
       ])
@@ -319,19 +345,17 @@ export default function STM32Simulator() {
     const diagramJson = JSON.stringify(diagramObj, null, 2)
 
     setFiles(prev => prev.map(f => {
-      if (f.id === 'main' && generatedCode) {
-        return { ...f, content: generatedCode }
-      }
-      if (f.id === 'diagram') {
-        return { ...f, content: diagramJson }
-      }
+      if (f.id === 'main' && generatedCode) return { ...f, content: generatedCode }
+      if (f.id === 'diagram') return { ...f, content: diagramJson }
       return f
     }))
 
-    setCodeGenBanner('✨ Code & diagram.json generated successfully!')
+    const compCount = comps.length
+    const connCount = conns.length
+    setCodeGenBanner(`✨ Generated main.c (${compCount} component${compCount !== 1 ? 's' : ''}, ${connCount} wire${connCount !== 1 ? 's' : ''}) + diagram.json`)
     setActiveFileId('main')
-    setTimeout(() => setCodeGenBanner(null), 3000)
-  }, [circuitComponents, connections])
+    setTimeout(() => setCodeGenBanner(null), 4000)
+  }, [circuitComponents])
 
   return (
     <div className="sim-root">
@@ -389,7 +413,11 @@ export default function STM32Simulator() {
                 </svg>
                 Generate Code
               </button>
-              <button className="sim-add-comp-btn" onClick={() => setShowPalette(v => !v)}>
+              <button
+                className={`sim-add-comp-btn ${showPalette ? 'active-palette' : ''}`}
+                onClick={() => { setShowPalette(v => !v); setPendingComponent(null) }}
+                title="Add Component (A)"
+              >
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                   <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
                 </svg>
@@ -405,12 +433,16 @@ export default function STM32Simulator() {
             onRemoveComponent={handleRemoveComponent}
             onConnectionsChange={handleConnectionsChange}
             onComponentsChange={updaterOrArray => {
-              // CircuitCanvas may pass a functional updater (prev => ...) or a plain array
               const resolved = typeof updaterOrArray === 'function'
                 ? updaterOrArray(circuitComponents)
                 : updaterOrArray
-              handleCircuitChanged(resolved, connections)
+              handleCircuitChanged(resolved, connectionsRef.current)
             }}
+            pendingComponent={pendingComponent}
+            onPlaceComponent={(compWithPos) => {
+              handleAddComponent(compWithPos, { x: compWithPos.x, y: compWithPos.y })
+            }}
+            onCancelPlace={() => setPendingComponent(null)}
           />
         </div>
       </div>
@@ -443,7 +475,12 @@ export default function STM32Simulator() {
         )}
       </div>
 
-      {showPalette && <ComponentPalette onAdd={handleAddComponent} onClose={() => setShowPalette(false)} />}
+      {showPalette && (
+        <ComponentPalette
+          onPick={(comp) => { setPendingComponent(comp); setShowPalette(false) }}
+          onClose={() => setShowPalette(false)}
+        />
+      )}
       {showLibPalette && <LibraryPalette onAdd={handleAddLibrary} onClose={() => setShowLibPalette(false)} existing={libraries} />}
     </div>
   )
